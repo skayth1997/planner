@@ -20,7 +20,6 @@ export default function PlannerCanvas() {
 
     drawGrid(canvas);
     drawRoom(canvas);
-
     canvas.renderAll();
 
     canvas.on("mouse:wheel", (opt) => {
@@ -89,9 +88,39 @@ export default function PlannerCanvas() {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
+    const handleDelete = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+
+      const active = canvas.getActiveObject();
+      if (!active) return;
+
+      canvas.remove(active);
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+    };
+
+    window.addEventListener("keydown", handleDelete);
+
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.id) return;
+
+      if (target.id === "add-sofa") addFurniture(canvas, "sofa");
+      if (target.id === "add-table") addFurniture(canvas, "table");
+      if (target.id === "add-chair") addFurniture(canvas, "chair");
+    };
+
+    window.addEventListener("click", onClick);
+
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("keydown", handleDelete);
+      window.removeEventListener("click", onClick);
+
       canvas.dispose();
       fabricCanvasRef.current = null;
     };
@@ -148,4 +177,35 @@ function drawRoom(canvas: Canvas) {
   });
 
   canvas.add(room);
+}
+
+function addFurniture(canvas: Canvas, type: "sofa" | "table" | "chair") {
+  const base = {
+    left: 450,
+    top: 300,
+    fill: "rgba(16,185,129,0.25)",
+    stroke: "#10b981",
+    strokeWidth: 2,
+    selectable: true,
+    evented: true,
+    hasControls: true,
+    hasBorders: true,
+    lockScalingFlip: true,
+    transparentCorners: false,
+  };
+
+  let obj: Rect;
+
+  if (type === "sofa") {
+    obj = new Rect({ ...base, width: 180, height: 80 });
+    obj.set({ rx: 10, ry: 10 });
+  } else if (type === "table") {
+    obj = new Rect({ ...base, width: 120, height: 120 });
+  } else {
+    obj = new Rect({ ...base, width: 60, height: 60 });
+  }
+
+  canvas.add(obj);
+  canvas.setActiveObject(obj);
+  canvas.requestRenderAll();
 }
