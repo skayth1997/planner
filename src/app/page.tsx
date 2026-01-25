@@ -9,7 +9,9 @@ export default function HomePage() {
   return (
     <main className="w-screen h-screen grid grid-cols-[260px_1fr] bg-neutral-100">
       <aside className="p-4 border-r border-neutral-300 bg-white">
-        <h1 className="text-lg font-semibold mb-4">Furniture</h1>
+        <h1 className="text-lg font-semibold mb-4 text-neutral-800">
+          Furniture
+        </h1>
 
         <div className="flex flex-col gap-2">
           <button id="add-sofa" className={buttonClass}>
