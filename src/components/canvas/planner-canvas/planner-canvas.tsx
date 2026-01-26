@@ -35,7 +35,6 @@ export type PlannerCanvasHandle = {
   undo: () => void;
   redo: () => void;
 
-  // NEW: persistence
   save: () => void;
   load: () => void;
   exportJson: () => void;
@@ -90,6 +89,8 @@ type FurnitureSnapshot = {
   };
 };
 
+type GuideLine = Line;
+
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
@@ -113,12 +114,18 @@ export default forwardRef<
   // Autosave debounce
   const autosaveTimerRef = useRef<number | null>(null);
 
+  // Guide lines (temporary)
+  const guidesRef = useRef<GuideLine[]>([]);
+
   // ---- Visual Styles (hover / active) ----
   const ACTIVE_STROKE = "#0f172a";
   const ACTIVE_STROKE_WIDTH = 3;
 
   const HOVER_STROKE = "#2563eb";
   const HOVER_STROKE_WIDTH = 3;
+
+  // Alignment snapping settings
+  const ALIGN_SNAP_TOLERANCE = 8; // pixels
 
   const serializeState = (canvas: Canvas) => {
     const items = canvas
@@ -146,7 +153,6 @@ export default forwardRef<
         },
       }));
 
-    // stable ordering by id prevents random diffs
     items.sort((a, b) => a.data.id.localeCompare(b.data.id));
     return JSON.stringify(items);
   };
@@ -177,21 +183,80 @@ export default forwardRef<
     const current = historyRef.current[historyIndexRef.current];
     if (current === snapshot) return;
 
-    // cut redo stack
     historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
 
     historyRef.current.push(snapshot);
     historyIndexRef.current = historyRef.current.length - 1;
 
-    // limit memory
     const LIMIT = 80;
     if (historyRef.current.length > LIMIT) {
       historyRef.current.shift();
       historyIndexRef.current--;
     }
 
-    // autosave after meaningful change
     scheduleAutosave();
+  };
+
+  const clearGuides = (canvas: Canvas) => {
+    if (!guidesRef.current.length) return;
+    for (const g of guidesRef.current) canvas.remove(g);
+    guidesRef.current = [];
+    canvas.requestRenderAll();
+  };
+
+  const addGuide = (canvas: Canvas, line: GuideLine) => {
+    canvas.add(line);
+    canvas.bringObjectToFront(line);
+    guidesRef.current.push(line);
+  };
+
+
+  const drawGuides = (
+    canvas: Canvas,
+    room: Rect,
+    guides: Array<
+      | { kind: "v"; x: number; y1: number; y2: number }
+      | { kind: "h"; y: number; x1: number; x2: number }
+      >
+  ) => {
+    clearGuides(canvas);
+
+    if (guides.length === 0) return;
+
+    for (const g of guides) {
+      if (g.kind === "v") {
+        addGuide(
+          canvas,
+          new Line([g.x, g.y1, g.x, g.y2], {
+            stroke: "#2563eb",
+            strokeWidth: 2,
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+            opacity: 0.9,
+          })
+        );
+      } else {
+        addGuide(
+          canvas,
+          new Line([g.x1, g.y, g.x2, g.y], {
+            stroke: "#2563eb",
+            strokeWidth: 2,
+            selectable: false,
+            evented: false,
+            excludeFromExport: true,
+            opacity: 0.9,
+          })
+        );
+      }
+    }
+
+    // Keep guides on top of everything
+    canvas.getObjects().forEach((o: any) => {
+      if (!isFurniture(o)) return;
+      // keep furniture above grid but below guides
+      // (guides already brought to front)
+    });
   };
 
   const restoreFromJson = (canvas: Canvas, room: Rect, json: string) => {
@@ -241,6 +306,7 @@ export default forwardRef<
 
     canvas.discardActiveObject();
     onSelectionChangeRef.current?.(null);
+    clearGuides(canvas);
     canvas.requestRenderAll();
 
     isApplyingHistoryRef.current = false;
@@ -306,7 +372,7 @@ export default forwardRef<
     canvas.requestRenderAll();
   };
 
-  // Persistence helpers (buttons)
+  // Persistence (buttons)
   const saveNow = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -323,7 +389,6 @@ export default forwardRef<
     const json = localStorage.getItem(STORAGE_KEY);
     if (!json) return;
 
-    // restore + reset history to this state
     restoreFromJson(canvas, room, json);
     restyleAllFurniture(canvas);
 
@@ -360,12 +425,121 @@ export default forwardRef<
     restoreFromJson(canvas, room, json);
     restyleAllFurniture(canvas);
 
-    // reset history to imported state
     historyRef.current = [json];
     historyIndexRef.current = 0;
 
-    // persist it
     localStorage.setItem(STORAGE_KEY, json);
+  };
+
+  // --- Alignment Guides + Snapping while moving ---
+  const computeObjectAABB = (obj: any) => {
+    // AABB in canvas coords (includes rotation)
+    const r = obj.getBoundingRect(false, true);
+    const left = r.left;
+    const top = r.top;
+    const right = r.left + r.width;
+    const bottom = r.top + r.height;
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      cx: (left + right) / 2,
+      cy: (top + bottom) / 2,
+      w: r.width,
+      h: r.height,
+    };
+  };
+
+  const snapValue = (value: number, target: number, tolerance: number) => {
+    const d = target - value;
+    if (Math.abs(d) <= tolerance) return { snapped: true, delta: d };
+    return { snapped: false, delta: 0 };
+  };
+
+  const alignAndGuide = (canvas: Canvas, room: Rect, moving: any) => {
+    const all = canvas.getObjects().filter((o: any) => isFurniture(o) && o !== moving);
+
+    const mv = computeObjectAABB(moving);
+
+    const roomRect = room.getBoundingRect();
+    const roomLeft = roomRect.left;
+    const roomTop = roomRect.top;
+    const roomRight = roomRect.left + roomRect.width;
+    const roomBottom = roomRect.top + roomRect.height;
+
+    let bestDx = 0;
+    let bestDy = 0;
+    let bestDxAbs = Number.POSITIVE_INFINITY;
+    let bestDyAbs = Number.POSITIVE_INFINITY;
+
+    const guides: Array<
+      | { kind: "v"; x: number; y1: number; y2: number }
+      | { kind: "h"; y: number; x1: number; x2: number }
+      > = [];
+
+    const candidatesX = [mv.left, mv.cx, mv.right];
+    const candidatesY = [mv.top, mv.cy, mv.bottom];
+
+    for (const o of all) {
+      const ob = computeObjectAABB(o);
+
+      const targetsX = [ob.left, ob.cx, ob.right];
+      const targetsY = [ob.top, ob.cy, ob.bottom];
+
+      // X alignment
+      for (const cX of candidatesX) {
+        for (const tX of targetsX) {
+          const s = snapValue(cX, tX, ALIGN_SNAP_TOLERANCE);
+          if (s.snapped && Math.abs(s.delta) < bestDxAbs) {
+            bestDxAbs = Math.abs(s.delta);
+            bestDx = s.delta;
+
+            // guide vertical line at tX spanning between objects (clamped to room bounds)
+            const y1 = Math.max(roomTop, Math.min(mv.top, ob.top));
+            const y2 = Math.min(roomBottom, Math.max(mv.bottom, ob.bottom));
+            guides.push({ kind: "v", x: tX, y1, y2 });
+          }
+        }
+      }
+
+      // Y alignment
+      for (const cY of candidatesY) {
+        for (const tY of targetsY) {
+          const s = snapValue(cY, tY, ALIGN_SNAP_TOLERANCE);
+          if (s.snapped && Math.abs(s.delta) < bestDyAbs) {
+            bestDyAbs = Math.abs(s.delta);
+            bestDy = s.delta;
+
+            // guide horizontal line at tY spanning between objects (clamped to room bounds)
+            const x1 = Math.max(roomLeft, Math.min(mv.left, ob.left));
+            const x2 = Math.min(roomRight, Math.max(mv.right, ob.right));
+            guides.push({ kind: "h", y: tY, x1, x2 });
+          }
+        }
+      }
+    }
+
+    // apply the best snap deltas (smallest alignment difference)
+    if (bestDxAbs !== Number.POSITIVE_INFINITY) {
+      moving.set({ left: (moving.left ?? 0) + bestDx });
+    }
+    if (bestDyAbs !== Number.POSITIVE_INFINITY) {
+      moving.set({ top: (moving.top ?? 0) + bestDy });
+    }
+
+    // draw guides based on the best snaps only
+    // Keep only one vertical and one horizontal guide (the last best) for clarity
+    const bestGuides: typeof guides = [];
+    // last v/h in list corresponds to best currently found
+    for (let i = guides.length - 1; i >= 0; i--) {
+      const g = guides[i];
+      if (g.kind === "v" && !bestGuides.some((x) => x.kind === "v")) bestGuides.push(g);
+      if (g.kind === "h" && !bestGuides.some((x) => x.kind === "h")) bestGuides.push(g);
+      if (bestGuides.length === 2) break;
+    }
+
+    drawGuides(canvas, room, bestGuides);
   };
 
   useEffect(() => {
@@ -443,6 +617,7 @@ export default forwardRef<
       isPanning = false;
       canvas.selection = true;
       canvas.defaultCursor = "default";
+      clearGuides(canvas);
     });
 
     // Selection -> React
@@ -460,16 +635,19 @@ export default forwardRef<
     canvas.on("selection:created", () => {
       emitSelection();
       restyleAllFurniture(canvas);
+      clearGuides(canvas);
     });
 
     canvas.on("selection:updated", () => {
       emitSelection();
       restyleAllFurniture(canvas);
+      clearGuides(canvas);
     });
 
     canvas.on("selection:cleared", () => {
       onSelectionChangeRef.current?.(null);
       restyleAllFurniture(canvas);
+      clearGuides(canvas);
     });
 
     // Hover
@@ -508,8 +686,14 @@ export default forwardRef<
       obj.setCoords();
       room.setCoords();
 
+      // clamp to room
       clampFurnitureInsideRoom(obj, room);
+
+      // align to other objects + draw guides
+      alignAndGuide(canvas, room, obj);
+
       emitSelection();
+      canvas.requestRenderAll();
     });
 
     canvas.on("object:modified", (opt) => {
@@ -522,6 +706,8 @@ export default forwardRef<
       obj.setCoords();
       emitSelection();
       restyleAllFurniture(canvas);
+      clearGuides(canvas);
+
       canvas.requestRenderAll();
 
       pushHistory(canvas);
@@ -542,6 +728,7 @@ export default forwardRef<
         if (e.shiftKey) redo();
         else undo();
         restyleAllFurniture(canvas);
+        clearGuides(canvas);
         return;
       }
 
@@ -549,6 +736,7 @@ export default forwardRef<
         e.preventDefault();
         redo();
         restyleAllFurniture(canvas);
+        clearGuides(canvas);
         return;
       }
 
@@ -563,6 +751,7 @@ export default forwardRef<
         canvas.discardActiveObject();
         onSelectionChangeRef.current?.(null);
         restyleAllFurniture(canvas);
+        clearGuides(canvas);
         canvas.requestRenderAll();
 
         pushHistory(canvas);
@@ -582,7 +771,7 @@ export default forwardRef<
     // Initial history snapshot
     pushHistory(canvas);
 
-    // Try autoload once on start
+    // Autoload
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
@@ -609,6 +798,7 @@ export default forwardRef<
         autosaveTimerRef.current = null;
       }
 
+      clearGuides(canvas);
       canvas.dispose();
       fabricCanvasRef.current = null;
       roomRef.current = null;
@@ -656,6 +846,7 @@ export default forwardRef<
           canvas.discardActiveObject();
           onSelectionChangeRef.current?.(null);
           restyleAllFurniture(canvas);
+          clearGuides(canvas);
           canvas.requestRenderAll();
 
           pushHistory(canvas);
@@ -708,6 +899,7 @@ export default forwardRef<
 
           onSelectionChangeRef.current?.(getSelectedInfo(rect as any));
           restyleAllFurniture(canvas);
+          clearGuides(canvas);
 
           canvas.requestRenderAll();
           pushHistory(canvas);
@@ -743,6 +935,7 @@ export default forwardRef<
 
           active.setCoords();
           restyleAllFurniture(canvas);
+          clearGuides(canvas);
           canvas.requestRenderAll();
 
           onSelectionChangeRef.current?.(getSelectedInfo(active));
@@ -755,6 +948,7 @@ export default forwardRef<
           const room = getRoom();
           fitRoomToView(canvas, room);
           restyleAllFurniture(canvas);
+          clearGuides(canvas);
         },
 
         undo() {

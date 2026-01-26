@@ -6,33 +6,27 @@ import PlannerCanvas, {
   SelectedInfo,
 } from "@/components/canvas/planner-canvas/planner-canvas";
 
-const btnAdd =
-  "px-3 py-2 rounded border border-blue-300 bg-blue-600 text-white hover:bg-blue-500 active:bg-blue-700 transition-colors text-sm";
+const buttonClass =
+  "px-3 py-2 rounded border border-blue-200 bg-blue-50 text-blue-700 " +
+  "hover:bg-blue-100 hover:border-blue-300 active:bg-blue-200 transition-colors text-sm";
 
-const btnPrimary =
-  "px-3 py-2 rounded bg-neutral-900 text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors text-sm";
-
-const btnSecondary =
-  "px-3 py-2 rounded border border-neutral-400 bg-white text-neutral-900 hover:bg-neutral-100 active:bg-neutral-200 transition-colors text-sm";
-
-const btnSecondaryDisabled =
-  "px-3 py-2 rounded border border-neutral-300 bg-white text-neutral-400 opacity-50 cursor-not-allowed text-sm";
-
-const btnDangerEnabled =
-  "px-3 py-2 rounded border border-red-300 bg-red-600 text-white hover:bg-red-500 active:bg-red-700 transition-colors text-sm";
-
-const btnDangerDisabled =
-  "px-3 py-2 rounded border border-red-200 bg-red-50 text-red-300 opacity-50 cursor-not-allowed text-sm";
+const buttonNeutral =
+  "px-3 py-2 rounded border border-neutral-300 bg-white text-neutral-900 " +
+  "hover:bg-neutral-100 active:bg-neutral-200 transition-colors text-sm " +
+  "disabled:opacity-40 disabled:cursor-not-allowed";
 
 export default function HomePage() {
   const canvasRef = useRef<PlannerCanvasHandle | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const [selected, setSelected] = useState<SelectedInfo | null>(null);
 
-  const [w, setW] = useState("");
-  const [h, setH] = useState("");
-  const [a, setA] = useState("");
+  // local edit fields
+  const [w, setW] = useState<string>("");
+  const [h, setH] = useState<string>("");
+  const [a, setA] = useState<string>("");
+
+  // import modal
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
 
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
@@ -44,10 +38,12 @@ export default function HomePage() {
       return;
     }
 
-    setW(String(Math.round(info.width)));
-    setH(String(Math.round(info.height)));
-    setA(String(Math.round(info.angle)));
+    setW(Math.round(info.width).toString());
+    setH(Math.round(info.height).toString());
+    setA(Math.round(info.angle).toString());
   }, []);
+
+  const canEdit = !!selected;
 
   const applyProps = () => {
     if (!selected) return;
@@ -68,54 +64,105 @@ export default function HomePage() {
     return `${selected.type.toUpperCase()} • ${selected.id}`;
   }, [selected]);
 
-  const isDisabled = selected === null;
+  const openImport = () => {
+    setImportText("");
+    setIsImportOpen(true);
+  };
 
-  const onImportClick = () => fileInputRef.current?.click();
-
-  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const text = await file.text();
-    canvasRef.current?.importJsonString(text);
-
-    // reset input so you can re-import the same file again
-    e.target.value = "";
+  const runImport = () => {
+    try {
+      canvasRef.current?.importJsonString(importText);
+      setIsImportOpen(false);
+      setImportText("");
+    } catch {
+      alert("Invalid JSON. Please paste exported planner JSON.");
+    }
   };
 
   return (
-    <main className="w-screen h-screen grid grid-cols-[340px_1fr] bg-neutral-100">
+    <main className="w-screen h-screen grid grid-cols-[360px_1fr] bg-neutral-100">
       <aside className="p-4 border-r border-neutral-300 bg-white flex flex-col gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-neutral-700">Planner</h1>
+          <h1 className="text-xl font-semibold">Planner</h1>
           <p className="text-sm text-neutral-500">
-            Scroll = zoom • Hold <b>Space</b> = pan • Ctrl/Cmd+Z undo
-          </p>
-          <p className="text-xs text-neutral-400 mt-1">
-            Autosave is enabled (local browser storage).
+            Scroll = zoom • Hold <b>Space</b> = pan • Select item to edit
           </p>
         </div>
 
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+          <div className="text-sm font-semibold text-neutral-700 mb-2">
+            Actions
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className={buttonNeutral}
+              onClick={() => canvasRef.current?.undo()}
+            >
+              Undo
+            </button>
+            <button
+              className={buttonNeutral}
+              onClick={() => canvasRef.current?.redo()}
+            >
+              Redo
+            </button>
+
+            <button
+              className={buttonNeutral}
+              onClick={() => canvasRef.current?.save()}
+            >
+              Save
+            </button>
+            <button
+              className={buttonNeutral}
+              onClick={() => canvasRef.current?.load()}
+            >
+              Load
+            </button>
+
+            <button
+              className={buttonNeutral}
+              onClick={() => canvasRef.current?.exportJson()}
+            >
+              Export JSON
+            </button>
+            <button
+              className={buttonNeutral}
+              onClick={() => setIsImportOpen(true)}
+            >
+              Import JSON
+            </button>
+          </div>
+
+          <button
+            className={`${buttonNeutral} w-full mt-2`}
+            onClick={() => canvasRef.current?.fitRoom()}
+          >
+            Fit room to view
+          </button>
+        </div>
+
+        {/* Add furniture */}
         <div className="flex flex-col gap-2">
-          <div className="text-sm font-semibold text-neutral-700">Add furniture</div>
+          <div className="text-sm font-semibold text-neutral-700">
+            Add furniture
+          </div>
           <div className="flex flex-col gap-2">
             <button
-              type="button"
-              className={btnAdd}
+              className={buttonClass}
               onClick={() => canvasRef.current?.addFurniture("sofa")}
             >
               Add Sofa
             </button>
             <button
-              type="button"
-              className={btnAdd}
+              className={buttonClass}
               onClick={() => canvasRef.current?.addFurniture("table")}
             >
               Add Table
             </button>
             <button
-              type="button"
-              className={btnAdd}
+              className={buttonClass}
               onClick={() => canvasRef.current?.addFurniture("chair")}
             >
               Add Chair
@@ -123,51 +170,12 @@ export default function HomePage() {
           </div>
         </div>
 
+        {/* Selection panel */}
         <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
           <div className="text-sm font-semibold text-neutral-700 mb-2">
-            Project
+            Selection
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.save()}>
-              Save
-            </button>
-            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.load()}>
-              Load
-            </button>
-            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.exportJson()}>
-              Export JSON
-            </button>
-            <button type="button" className={btnSecondary} onClick={onImportClick}>
-              Import JSON
-            </button>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={onFilePicked}
-            />
-          </div>
-
-          <p className="text-xs text-neutral-500 mt-2">
-            Export creates a file you can send to a client. Import restores it.
-          </p>
-        </div>
-
-        <div className="flex gap-2">
-          <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.undo()}>
-            Undo
-          </button>
-          <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.redo()}>
-            Redo
-          </button>
-        </div>
-
-        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">Selection</div>
-          <div className="text-sm text-neutral-800">{header}</div>
+          <div className="text-sm text-neutral-700">{header}</div>
 
           {!selected ? (
             <p className="text-sm text-neutral-500 mt-2">
@@ -181,7 +189,7 @@ export default function HomePage() {
                   <input
                     value={w}
                     onChange={(e) => setW(e.target.value)}
-                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm bg-white"
+                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
                     inputMode="numeric"
                   />
                 </label>
@@ -191,7 +199,7 @@ export default function HomePage() {
                   <input
                     value={h}
                     onChange={(e) => setH(e.target.value)}
-                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm bg-white"
+                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
                     inputMode="numeric"
                   />
                 </label>
@@ -201,7 +209,7 @@ export default function HomePage() {
                   <input
                     value={a}
                     onChange={(e) => setA(e.target.value)}
-                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm bg-white"
+                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
                     inputMode="numeric"
                   />
                 </label>
@@ -209,27 +217,26 @@ export default function HomePage() {
 
               <div className="flex gap-2">
                 <button
-                  type="button"
-                  className={isDisabled ? btnSecondaryDisabled : btnPrimary}
-                  disabled={isDisabled}
+                  disabled={!canEdit}
+                  className="px-3 py-2 rounded bg-neutral-900 text-white
+                             hover:bg-neutral-800 transition-colors text-sm
+                             disabled:opacity-40"
                   onClick={applyProps}
                 >
                   Apply
                 </button>
 
                 <button
-                  type="button"
-                  className={isDisabled ? btnSecondaryDisabled : btnSecondary}
-                  disabled={isDisabled}
+                  className={`${buttonNeutral} disabled:opacity-40`}
+                  disabled={!canEdit}
                   onClick={() => canvasRef.current?.duplicateSelected()}
                 >
                   Duplicate
                 </button>
 
                 <button
-                  type="button"
-                  className={`ml-auto ${isDisabled ? btnDangerDisabled : btnDangerEnabled}`}
-                  disabled={isDisabled}
+                  className="ml-auto px-3 py-2 rounded border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 active:bg-red-200 transition-colors text-sm disabled:opacity-40"
+                  disabled={!canEdit}
                   onClick={() => canvasRef.current?.deleteSelected()}
                 >
                   Delete
@@ -239,20 +246,63 @@ export default function HomePage() {
           )}
         </div>
 
-        <button type="button" className={btnPrimary} onClick={() => canvasRef.current?.fitRoom()}>
-          Fit room to view
-        </button>
-
         <div className="mt-auto text-xs text-neutral-500">
-          Pro tip: Autosave is local. Export/Import is the “shareable” format.
+          Pro tip: Ctrl/Cmd+Z undo • Ctrl/Cmd+Shift+Z redo • Delete removes
+          selection
         </div>
       </aside>
 
       <section className="p-4">
         <div className="w-full h-full">
-          <PlannerCanvas ref={canvasRef} onSelectionChange={onSelectionChange} />
+          <PlannerCanvas
+            ref={canvasRef}
+            onSelectionChange={onSelectionChange}
+          />
         </div>
       </section>
+
+      {/* Import modal */}
+      {isImportOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white border border-neutral-200 shadow-lg p-4">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">Import JSON</div>
+              <button
+                className={buttonNeutral}
+                onClick={() => setIsImportOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <p className="text-sm text-neutral-500 mt-2">
+              Paste JSON that you exported from Planner.
+            </p>
+
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              className="mt-3 w-full h-64 rounded border border-neutral-300 p-3 font-mono text-xs"
+              placeholder='[{"left":...}]'
+            />
+
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                className={buttonNeutral}
+                onClick={() => setIsImportOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-2 rounded bg-neutral-900 text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors text-sm"
+                onClick={runImport}
+              >
+                Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
