@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { Canvas, Line, Rect } from "fabric";
 
 const GRID_SIZE = 50;
@@ -11,15 +11,70 @@ const ZOOM_SENSITIVITY = 0.999;
 
 type FurnitureType = "sofa" | "table" | "chair";
 
-export default function PlannerCanvas() {
+export type SelectedInfo = {
+  id: string;
+  type: FurnitureType | "unknown";
+  left: number;
+  top: number;
+  width: number; // actual width (scaled)
+  height: number; // actual height (scaled)
+  angle: number;
+};
+
+export type PlannerCanvasHandle = {
+  addFurniture: (type: FurnitureType) => void;
+  deleteSelected: () => void;
+  duplicateSelected: () => void;
+  setSelectedProps: (
+    patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle">>
+  ) => void;
+  fitRoom: () => void;
+};
+
+function makeId() {
+  return Math.random().toString(36).slice(2, 9);
+}
+
+function isFurniture(obj: any): obj is Rect {
+  return obj?.data?.kind === "furniture";
+}
+
+function getFurnitureType(obj: any): FurnitureType | "unknown" {
+  return obj?.data?.type ?? "unknown";
+}
+
+function getSelectedInfo(obj: any): SelectedInfo {
+  const rect = obj.getBoundingRect(false, true);
+  return {
+    id: obj.data?.id ?? makeId(),
+    type: getFurnitureType(obj),
+    left: obj.left ?? 0,
+    top: obj.top ?? 0,
+    width: rect.width,
+    height: rect.height,
+    angle: obj.angle ?? 0,
+  };
+}
+
+export default forwardRef<
+  PlannerCanvasHandle,
+  { onSelectionChange?: (info: SelectedInfo | null) => void }
+  >(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
 
+  const roomRef = useRef<Rect | null>(null);
+
+  // local flag for space panning
+  const isSpacePressedRef = useRef(false);
+
+  // ✅ stable callback ref (don’t trigger re-init)
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+
   useEffect(() => {
-    if (!htmlCanvasRef.current) {
-      return;
-    }
+    if (!htmlCanvasRef.current) return;
 
     const canvas = new Canvas(htmlCanvasRef.current, {
       backgroundColor: "#fafafa",
@@ -30,25 +85,25 @@ export default function PlannerCanvas() {
     fabricCanvasRef.current = canvas;
 
     const room = drawRoom(canvas);
+    roomRef.current = room;
+
     drawGrid(canvas, room, GRID_SIZE);
 
     const resizeCanvasToContainer = () => {
       const el = containerRef.current;
-      if (!el) {
-        return;
-      }
+      if (!el) return;
 
       canvas.setDimensions({ width: el.clientWidth, height: el.clientHeight });
       canvas.calcOffset();
-
       fitRoomToView(canvas, room);
     };
 
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    canvas.renderAll();
-
+    /* =========================
+       Zoom
+    ========================= */
     canvas.on("mouse:wheel", (opt) => {
       const event = opt.e as WheelEvent;
 
@@ -62,19 +117,20 @@ export default function PlannerCanvas() {
       event.stopPropagation();
     });
 
+    /* =========================
+       Pan (Space + drag)
+    ========================= */
     let isPanning = false;
-    let isSpacePressed = false;
     let lastClientX = 0;
     let lastClientY = 0;
 
     canvas.on("mouse:down", (opt) => {
-      if (!isSpacePressed) return;
+      if (!isSpacePressedRef.current) return;
 
       const e = opt.e as MouseEvent;
       isPanning = true;
       canvas.selection = false;
       canvas.defaultCursor = "grabbing";
-
       lastClientX = e.clientX;
       lastClientY = e.clientY;
     });
@@ -83,10 +139,9 @@ export default function PlannerCanvas() {
       if (!isPanning) return;
 
       const e = opt.e as MouseEvent;
-      const viewportTransform = canvas.viewportTransform!;
-      viewportTransform[4] += e.clientX - lastClientX;
-      viewportTransform[5] += e.clientY - lastClientY;
-
+      const vpt = canvas.viewportTransform!;
+      vpt[4] += e.clientX - lastClientX;
+      vpt[5] += e.clientY - lastClientY;
       canvas.requestRenderAll();
 
       lastClientX = e.clientX;
@@ -99,37 +154,81 @@ export default function PlannerCanvas() {
       canvas.defaultCursor = "default";
     });
 
+    /* =========================
+       Selection -> React
+    ========================= */
+    const emitSelection = () => {
+      const active = canvas.getActiveObject();
+
+      if (!active || !isFurniture(active)) {
+        onSelectionChangeRef.current?.(null);
+        return;
+      }
+
+      onSelectionChangeRef.current?.(getSelectedInfo(active));
+    };
+
+    canvas.on("selection:created", emitSelection);
+    canvas.on("selection:updated", emitSelection);
+    canvas.on("selection:cleared", () => {
+      onSelectionChangeRef.current?.(null);
+    });
+
+    // keep panel updated while transforming
+    canvas.on("object:scaling", emitSelection);
+    canvas.on("object:rotating", emitSelection);
+
+    canvas.on("object:moving", (opt) => {
+      const obj = opt.target as any;
+      if (!obj || !isFurniture(obj)) return;
+
+      // clamp while moving
+      obj.setCoords();
+      room.setCoords();
+      clampFurnitureInsideRoom(obj, room);
+
+      emitSelection();
+    });
+
     canvas.on("object:modified", (opt) => {
-      const obj = opt.target;
-      if (!obj) return;
+      const obj = opt.target as any;
+      if (!obj || !isFurniture(obj)) return;
 
       snapFurnitureToRoomGrid(obj, room, GRID_SIZE);
       clampFurnitureInsideRoom(obj, room);
-    });
-
-    canvas.on("object:moving", (opt) => {
-      const obj = opt.target;
-      if (!obj) return;
-
-      const kind = (obj as any).data?.kind;
-      if (kind !== "furniture") return;
 
       obj.setCoords();
-      room.setCoords();
-
-      clampFurnitureInsideRoom(obj, room);
+      emitSelection();
+      canvas.requestRenderAll();
     });
 
+    /* =========================
+       Keyboard
+    ========================= */
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
-        isSpacePressed = true;
+        isSpacePressedRef.current = true;
         canvas.defaultCursor = "grab";
+      }
+
+      // Delete selected furniture
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+        const active = canvas.getActiveObject() as any;
+        if (!active || !isFurniture(active)) return;
+
+        canvas.remove(active);
+        canvas.discardActiveObject();
+        onSelectionChangeRef.current?.(null);
+        canvas.requestRenderAll();
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") {
-        isSpacePressed = false;
+        isSpacePressedRef.current = false;
         canvas.defaultCursor = "default";
       }
     };
@@ -137,59 +236,184 @@ export default function PlannerCanvas() {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    const handleDelete = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
-
-      const active = canvas.getActiveObject();
-      if (!active) return;
-
-      canvas.remove(active);
-      canvas.discardActiveObject();
-      canvas.requestRenderAll();
-    };
-
-    window.addEventListener("keydown", handleDelete);
-
-    const onClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (!target?.id) return;
-
-      if (target.id === "add-sofa") {
-        addFurniture(canvas, room, "sofa");
-      }
-      if (target.id === "add-table") {
-        addFurniture(canvas, room, "table");
-      }
-      if (target.id === "add-chair") {
-        addFurniture(canvas, room, "chair");
-      }
-    };
-
-    window.addEventListener("click", onClick);
+    canvas.requestRenderAll();
 
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
-      window.removeEventListener("keydown", handleDelete);
-      window.removeEventListener("click", onClick);
 
       canvas.dispose();
       fabricCanvasRef.current = null;
+      roomRef.current = null;
     };
   }, []);
 
+  /* =========================
+     Exposed Canvas API
+  ========================= */
+  useImperativeHandle(
+    ref,
+    (): PlannerCanvasHandle => {
+      const getCanvas = () => {
+        const c = fabricCanvasRef.current;
+        if (!c) throw new Error("Canvas not initialized yet");
+        return c;
+      };
+
+      const getRoom = () => {
+        const r = roomRef.current;
+        if (!r) throw new Error("Room not initialized yet");
+        return r;
+      };
+
+      const getActiveFurniture = () => {
+        const canvas = getCanvas();
+        const active = canvas.getActiveObject() as any;
+        if (!active || !isFurniture(active)) return null;
+        return active;
+      };
+
+      return {
+        addFurniture(type) {
+          const canvas = getCanvas();
+          const room = getRoom();
+          addFurniture(canvas, room, type);
+        },
+
+        deleteSelected() {
+          const canvas = getCanvas();
+          const active = getActiveFurniture();
+          if (!active) return;
+
+          canvas.remove(active);
+          canvas.discardActiveObject();
+          onSelectionChangeRef.current?.(null);
+          canvas.requestRenderAll();
+        },
+
+        duplicateSelected() {
+          const canvas = getCanvas();
+          const room = getRoom();
+          const active = getActiveFurniture();
+          if (!active) return;
+
+          const rect = new Rect({
+            left: (active.left ?? 0) + GRID_SIZE,
+            top: (active.top ?? 0) + GRID_SIZE,
+            width: active.width,
+            height: active.height,
+            fill: active.fill,
+            stroke: active.stroke,
+            strokeWidth: active.strokeWidth,
+            selectable: true,
+            evented: true,
+            hasControls: true,
+            hasBorders: true,
+            lockScalingFlip: true,
+            transparentCorners: false,
+            angle: active.angle ?? 0,
+          });
+
+          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+
+          (rect as any).data = {
+            kind: "furniture",
+            type: active.data?.type ?? "unknown",
+            id: makeId(),
+          };
+
+          canvas.add(rect);
+
+          clampFurnitureInsideRoom(rect as any, room);
+          snapFurnitureToRoomGrid(rect as any, room, GRID_SIZE);
+
+          rect.setCoords();
+          canvas.setActiveObject(rect);
+          canvas.requestRenderAll();
+
+          onSelectionChangeRef.current?.(getSelectedInfo(rect as any));
+        },
+
+        setSelectedProps(patch) {
+          const canvas = getCanvas();
+          const room = getRoom();
+          const active = getActiveFurniture();
+          if (!active) return;
+
+          if (typeof patch.width === "number" && patch.width > 1) {
+            const current = active.getBoundingRect(false, true).width;
+            const factor = patch.width / Math.max(1, current);
+            active.scaleX = (active.scaleX ?? 1) * factor;
+          }
+
+          if (typeof patch.height === "number" && patch.height > 1) {
+            const current = active.getBoundingRect(false, true).height;
+            const factor = patch.height / Math.max(1, current);
+            active.scaleY = (active.scaleY ?? 1) * factor;
+          }
+
+          if (typeof patch.angle === "number") {
+            active.angle = patch.angle;
+          }
+
+          active.setCoords();
+          room.setCoords();
+
+          clampFurnitureInsideRoom(active, room);
+          snapFurnitureToRoomGrid(active, room, GRID_SIZE);
+
+          active.setCoords();
+          canvas.requestRenderAll();
+
+          onSelectionChangeRef.current?.(getSelectedInfo(active));
+        },
+
+        fitRoom() {
+          const canvas = getCanvas();
+          const room = getRoom();
+          fitRoomToView(canvas, room);
+        },
+      };
+    },
+    [] // ✅ important: don’t recreate handle on every render
+  );
+
   return (
     <div
-      className="relative w-full h-full bg-white border border-neutral-300 overflow-hidden"
       ref={containerRef}
+      className="relative w-full h-full bg-white border border-neutral-300 overflow-hidden"
     >
       <canvas ref={htmlCanvasRef} />
     </div>
   );
+});
+
+/* =========================
+   Room + Grid
+========================= */
+function drawRoom(canvas: Canvas) {
+  const strokeWidth = 3;
+  const width = 600 - strokeWidth;
+  const height = 400 - strokeWidth;
+
+  const left = 200;
+  const top = 150;
+
+  const room = new Rect({
+    left,
+    top,
+    width,
+    height,
+    fill: "rgba(59,130,246,0.15)",
+    stroke: "#3b82f6",
+    strokeWidth,
+    selectable: false,
+    evented: false,
+  });
+
+  canvas.add(room);
+  return room;
 }
 
 function drawGrid(canvas: Canvas, room: Rect, gridSize = GRID_SIZE) {
@@ -225,30 +449,12 @@ function drawGrid(canvas: Canvas, room: Rect, gridSize = GRID_SIZE) {
   }
 }
 
-function drawRoom(canvas: Canvas) {
-  const strokeWidth = 3;
-  const width = 600 - strokeWidth;
-  const height = 400 - strokeWidth;
-  const left = width / 2 + strokeWidth / 2;
-  const top = height / 2 + strokeWidth / 2;
-
-  const room = new Rect({
-    left,
-    top,
-    width,
-    height,
-    fill: "rgba(59,130,246,0.15)",
-    stroke: "#3b82f6",
-    strokeWidth,
-    selectable: false,
-    evented: false,
-  });
-
-  canvas.add(room);
-  return room;
-}
-
+/* =========================
+   Furniture helpers
+========================= */
 function snapFurnitureToRoomGrid(obj: any, room: Rect, grid: number) {
+  if (!isFurniture(obj)) return;
+
   const roomRect = room.getBoundingRect();
   const stroke = room.strokeWidth ?? 0;
 
@@ -261,10 +467,44 @@ function snapFurnitureToRoomGrid(obj: any, room: Rect, grid: number) {
   });
 }
 
+function clampFurnitureInsideRoom(obj: any, room: Rect) {
+  if (!isFurniture(obj)) return;
+
+  room.setCoords();
+  obj.setCoords();
+
+  const roomRect = room.getBoundingRect();
+  const stroke = room.strokeWidth ?? 0;
+  const inset = stroke / 2;
+
+  const innerLeft = roomRect.left + inset;
+  const innerTop = roomRect.top + inset;
+  const innerRight = roomRect.left + roomRect.width - inset;
+  const innerBottom = roomRect.top + roomRect.height - inset;
+
+  const objRect = obj.getBoundingRect();
+
+  let nextLeft = obj.left ?? 0;
+  let nextTop = obj.top ?? 0;
+
+  if (objRect.left < innerLeft) nextLeft += innerLeft - objRect.left;
+  if (objRect.top < innerTop) nextTop += innerTop - objRect.top;
+
+  const objRight = objRect.left + objRect.width;
+  const objBottom = objRect.top + objRect.height;
+
+  if (objRight > innerRight) nextLeft += innerRight - objRight;
+  if (objBottom > innerBottom) nextTop += innerBottom - objBottom;
+
+  obj.set({ left: nextLeft, top: nextTop });
+  obj.setCoords();
+}
+
 function addFurniture(canvas: Canvas, room: Rect, type: FurnitureType) {
   const roomRect = room.getBoundingRect();
   const stroke = room.strokeWidth ?? 0;
   const inset = stroke / 2;
+
   const innerLeft = roomRect.left + inset;
   const innerTop = roomRect.top + inset;
   const innerRight = roomRect.left + roomRect.width - inset;
@@ -289,7 +529,11 @@ function addFurniture(canvas: Canvas, room: Rect, type: FurnitureType) {
   const spawnLeft = innerLeft + (innerRight - innerLeft) / 2;
   const spawnTop = innerTop + (innerBottom - innerTop) / 2;
 
-  const base = {
+  const obj = new Rect({
+    left: spawnLeft,
+    top: spawnTop,
+    width,
+    height,
     fill: "rgba(16,185,129,0.25)",
     stroke: "#10b981",
     strokeWidth: 2,
@@ -299,83 +543,25 @@ function addFurniture(canvas: Canvas, room: Rect, type: FurnitureType) {
     hasBorders: true,
     lockScalingFlip: true,
     transparentCorners: false,
-  };
-
-  const obj = new Rect({
-    ...base,
-    left: spawnLeft,
-    top: spawnTop,
-    width,
-    height,
   });
 
-  if (rounded) {
-    obj.set({ rx: 10, ry: 10 });
-  }
+  if (rounded) obj.set({ rx: 10, ry: 10 });
 
-  (obj as any).data = { kind: "furniture", type };
-  (obj as any).__borderPad = computeObjectBorderPadding(obj);
+  (obj as any).data = { kind: "furniture", type, id: makeId() };
 
   canvas.add(obj);
 
-  clampFurnitureInsideRoom(obj, room);
-  snapFurnitureToRoomGrid(obj, room, GRID_SIZE);
+  clampFurnitureInsideRoom(obj as any, room);
+  snapFurnitureToRoomGrid(obj as any, room, GRID_SIZE);
 
   obj.setCoords();
   canvas.setActiveObject(obj);
   canvas.requestRenderAll();
 }
 
-function computeObjectBorderPadding(obj: any) {
-  const scaledW = obj.getScaledWidth();
-  const scaledH = obj.getScaledHeight();
-  const rect = obj.getBoundingRect(false, true);
-
-  const padX = Math.max(0, (rect.width - scaledW) / 2);
-  const padY = Math.max(0, (rect.height - scaledH) / 2);
-
-  return { padX, padY };
-}
-
-function clampFurnitureInsideRoom(obj: any, room: Rect) {
-  room.setCoords();
-  obj.setCoords();
-
-  const roomRect = room.getBoundingRect();
-  const stroke = room.strokeWidth ?? 0;
-  const inset = stroke / 2;
-
-  const innerLeft = roomRect.left + inset;
-  const innerTop = roomRect.top + inset;
-  const innerRight = roomRect.left + roomRect.width - inset;
-  const innerBottom = roomRect.top + roomRect.height - inset;
-
-  const objRect = obj.getBoundingRect();
-
-  let nextLeft = obj.left ?? 0;
-  let nextTop = obj.top ?? 0;
-
-  if (objRect.left < innerLeft) {
-    nextLeft += innerLeft - objRect.left;
-  }
-  if (objRect.top < innerTop) {
-    nextTop += innerTop - objRect.top;
-  }
-
-  const objRight = objRect.left + objRect.width;
-  const objBottom = objRect.top + objRect.height;
-
-  if (objRight > innerRight) {
-    nextLeft += innerRight - objRight;
-  }
-  if (objBottom > innerBottom) {
-    nextTop += innerBottom - objBottom;
-  }
-
-  obj.set({ left: nextLeft, top: nextTop });
-  obj.setCoords();
-}
-
+/* =========================
+   Fit room to view
+========================= */
 function fitRoomToView(canvas: Canvas, room: Rect, padding = 40) {
   const roomRect = room.getBoundingRect();
 
