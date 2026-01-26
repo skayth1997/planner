@@ -30,7 +30,6 @@ export type PlannerCanvasHandle = {
   importJsonString: (json: string) => void;
 };
 
-/** Snapshot for furniture only (serializable, stable). */
 export type FurnitureSnapshot = {
   left: number;
   top: number;

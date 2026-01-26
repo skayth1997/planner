@@ -41,7 +41,6 @@ export function restoreFromJson(
   json: string,
   onClearSelection: () => void
 ) {
-  // remove furniture only
   canvas.getObjects().forEach((o: any) => {
     if (isFurniture(o)) canvas.remove(o);
   });
@@ -89,7 +88,6 @@ export function restoreFromJson(
 }
 
 export function pushHistory(
-  canvas: Canvas,
   historyRef: { current: string[] },
   historyIndexRef: { current: number },
   snapshot: string

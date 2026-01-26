@@ -17,6 +17,7 @@ export function addGuide(
   line: GuideLine
 ) {
   canvas.add(line);
+  // Fabric v7: Canvas has bringObjectToFront (NOT bringToFront)
   canvas.bringObjectToFront(line);
   guidesRef.current.push(line);
 }
@@ -63,7 +64,6 @@ export function drawGuides(
     }
   }
 
-  // keep guides on top; furniture order not changed
   canvas.getObjects().forEach((o: any) => {
     if (!isFurniture(o)) return;
   });
@@ -82,8 +82,6 @@ function computeObjectAABB(obj: any) {
     bottom,
     cx: (left + right) / 2,
     cy: (top + bottom) / 2,
-    w: r.width,
-    h: r.height,
   };
 }
 
@@ -166,7 +164,6 @@ export function alignAndGuide(
     moving.set({ top: (moving.top ?? 0) + bestDy });
   }
 
-  // keep only one v + one h
   const bestGuides: typeof guides = [];
   for (let i = guides.length - 1; i >= 0; i--) {
     const g = guides[i];

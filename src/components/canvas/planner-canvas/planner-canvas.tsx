@@ -14,14 +14,29 @@ import {
   HOVER_STROKE_WIDTH,
 } from "./planner-constants";
 
-import type { PlannerCanvasHandle, SelectedInfo, FurnitureType, GuideLine } from "./planner-types";
-import { isFurniture, getSelectedInfo } from "./utils";
+import type {
+  PlannerCanvasHandle,
+  SelectedInfo,
+  FurnitureType,
+  GuideLine,
+} from "./planner-types";
+
+import { isFurniture, getSelectedInfo, makeId } from "./utils";
 import { drawRoom, drawGrid } from "./room";
-import { addFurniture, clampFurnitureInsideRoom, snapFurnitureToRoomGrid } from "./furniture";
+import {
+  addFurniture,
+  clampFurnitureInsideRoom,
+  snapFurnitureToRoomGrid,
+} from "./furniture";
 import { fitRoomToView } from "./fit";
 import { alignAndGuide, clearGuides } from "./guides";
 import { serializeState, restoreFromJson, pushHistory } from "./history";
-import { saveNow, loadNow, exportJson as exportJsonFile, importJsonString as importJson } from "./persistence";
+import {
+  saveNow,
+  loadNow,
+  exportJson as exportJsonFile,
+  importJsonString as importJson,
+} from "./persistence";
 
 export default forwardRef<
   PlannerCanvasHandle,
@@ -80,6 +95,13 @@ export default forwardRef<
     canvas.requestRenderAll();
   };
 
+  const pushHistoryNow = (canvas: Canvas) => {
+    if (isApplyingHistoryRef.current) return;
+    const snap = serializeState(canvas);
+    pushHistory(historyRef, historyIndexRef, snap);
+    scheduleAutosave();
+  };
+
   const undo = () => {
     const canvas = fabricCanvasRef.current;
     const room = roomRef.current;
@@ -87,6 +109,7 @@ export default forwardRef<
     if (historyIndexRef.current <= 0) return;
 
     historyIndexRef.current -= 1;
+
     isApplyingHistoryRef.current = true;
     restoreFromJson(canvas, room, historyRef.current[historyIndexRef.current], () => {
       onSelectionChangeRef.current?.(null);
@@ -105,6 +128,7 @@ export default forwardRef<
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
 
     historyIndexRef.current += 1;
+
     isApplyingHistoryRef.current = true;
     restoreFromJson(canvas, room, historyRef.current[historyIndexRef.current], () => {
       onSelectionChangeRef.current?.(null);
@@ -113,13 +137,6 @@ export default forwardRef<
 
     restyleAllFurniture(canvas);
     clearGuides(canvas, guidesRef);
-    scheduleAutosave();
-  };
-
-  const pushHistoryNow = (canvas: Canvas) => {
-    if (isApplyingHistoryRef.current) return;
-    const snap = serializeState(canvas);
-    pushHistory(canvas, historyRef, historyIndexRef, snap);
     scheduleAutosave();
   };
 
@@ -151,6 +168,7 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
+    // zoom
     canvas.on("mouse:wheel", (opt) => {
       const event = opt.e as WheelEvent;
 
@@ -164,6 +182,7 @@ export default forwardRef<
       event.stopPropagation();
     });
 
+    // pan
     let isPanning = false;
     let lastClientX = 0;
     let lastClientY = 0;
@@ -226,6 +245,7 @@ export default forwardRef<
       clearGuides(canvas, guidesRef);
     });
 
+    // hover
     canvas.on("mouse:over", (opt) => {
       const t = opt.target as any;
       if (!t || !isFurniture(t)) return;
@@ -252,6 +272,7 @@ export default forwardRef<
       canvas.requestRenderAll();
     });
 
+    // keep panel updated during transforms
     canvas.on("object:scaling", emitSelection);
     canvas.on("object:rotating", emitSelection);
 
@@ -285,6 +306,7 @@ export default forwardRef<
       pushHistoryNow(canvas);
     });
 
+    // keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         isSpacePressedRef.current = true;
@@ -335,7 +357,7 @@ export default forwardRef<
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    // initial snapshot
+    // history init
     pushHistoryNow(canvas);
 
     // autoload
@@ -375,7 +397,7 @@ export default forwardRef<
 
   useImperativeHandle(
     ref,
-    (): PlannerCanvasHandle => ({
+    () => ({
       addFurniture(type: FurnitureType) {
         const canvas = fabricCanvasRef.current;
         const room = roomRef.current;
@@ -437,7 +459,7 @@ export default forwardRef<
         (rect as any).data = {
           kind: "furniture",
           type: active.data?.type ?? "unknown",
-          id: Math.random().toString(36).slice(2, 9),
+          id: makeId(),
           baseStroke: active.data?.baseStroke ?? "#10b981",
           baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
         };
@@ -492,7 +514,6 @@ export default forwardRef<
         canvas.requestRenderAll();
 
         onSelectionChangeRef.current?.(getSelectedInfo(active));
-
         pushHistoryNow(canvas);
       },
 
@@ -556,7 +577,10 @@ export default forwardRef<
   );
 
   return (
-    <div ref={containerRef} className="relative w-full h-full bg-white border border-neutral-300 overflow-hidden">
+    <div
+      ref={containerRef}
+      className="relative w-full h-full bg-white border border-neutral-300 overflow-hidden"
+    >
       <canvas ref={htmlCanvasRef} />
     </div>
   );
