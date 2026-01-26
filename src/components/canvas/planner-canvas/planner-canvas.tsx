@@ -1,6 +1,11 @@
 "use client";
 
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import React, {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 import { Canvas, Line, Rect } from "fabric";
 
 const GRID_SIZE = 50;
@@ -29,6 +34,9 @@ export type PlannerCanvasHandle = {
     patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle">>
   ) => void;
   fitRoom: () => void;
+
+  undo: () => void;
+  redo: () => void;
 };
 
 function makeId() {
@@ -56,22 +64,168 @@ function getSelectedInfo(obj: any): SelectedInfo {
   };
 }
 
+/** A plain snapshot for Rect furniture (serializable, no Fabric instances) */
+type FurnitureSnapshot = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  angle: number;
+  rx?: number;
+  ry?: number;
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  scaleX?: number;
+  scaleY?: number;
+  data: { kind: "furniture"; type: FurnitureType | "unknown"; id: string };
+};
+
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
-
   const roomRef = useRef<Rect | null>(null);
 
-  // local flag for space panning
   const isSpacePressedRef = useRef(false);
 
-  // ✅ stable callback ref (don’t trigger re-init)
+  // stable callback ref
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
+
+  // History
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef<number>(-1);
+  const isApplyingHistoryRef = useRef(false);
+
+  const serializeState = (canvas: Canvas) => {
+    const items = canvas
+      .getObjects()
+      .filter((o: any) => o?.data?.kind === "furniture")
+      .map(
+        (o: any): FurnitureSnapshot => ({
+          left: o.left ?? 0,
+          top: o.top ?? 0,
+          width: o.width ?? 0,
+          height: o.height ?? 0,
+          angle: o.angle ?? 0,
+          rx: o.rx,
+          ry: o.ry,
+          fill: o.fill,
+          stroke: o.stroke,
+          strokeWidth: o.strokeWidth ?? 2,
+          scaleX: o.scaleX ?? 1,
+          scaleY: o.scaleY ?? 1,
+          data: {
+            kind: "furniture",
+            type: o.data?.type ?? "unknown",
+            id: o.data?.id ?? makeId(),
+          },
+        })
+      );
+
+    // stable ordering by id (prevents random diffs)
+    items.sort((a, b) => a.data.id.localeCompare(b.data.id));
+    return JSON.stringify(items);
+  };
+
+  const pushHistory = (canvas: Canvas) => {
+    if (isApplyingHistoryRef.current) return;
+
+    const snapshot = serializeState(canvas);
+    const current = historyRef.current[historyIndexRef.current];
+    if (current === snapshot) return;
+
+    // cut redo stack
+    historyRef.current = historyRef.current.slice(
+      0,
+      historyIndexRef.current + 1
+    );
+
+    historyRef.current.push(snapshot);
+    historyIndexRef.current = historyRef.current.length - 1;
+
+    // limit memory
+    const LIMIT = 80;
+    if (historyRef.current.length > LIMIT) {
+      historyRef.current.shift();
+      historyIndexRef.current--;
+    }
+  };
+
+  const restoreState = (canvas: Canvas, room: Rect, json: string) => {
+    isApplyingHistoryRef.current = true;
+
+    // remove existing furniture
+    canvas.getObjects().forEach((o: any) => {
+      if (o?.data?.kind === "furniture") canvas.remove(o);
+    });
+
+    const data: FurnitureSnapshot[] = JSON.parse(json);
+
+    for (const s of data) {
+      const rect = new Rect({
+        left: s.left,
+        top: s.top,
+        width: s.width,
+        height: s.height,
+        fill: s.fill ?? "rgba(16,185,129,0.25)",
+        stroke: s.stroke ?? "#10b981",
+        strokeWidth: s.strokeWidth ?? 2,
+        selectable: true,
+        evented: true,
+        hasControls: true,
+        hasBorders: true,
+        lockScalingFlip: true,
+        transparentCorners: false,
+        angle: s.angle ?? 0,
+      });
+
+      if (typeof s.rx === "number" && typeof s.ry === "number") {
+        rect.set({ rx: s.rx, ry: s.ry });
+      }
+
+      rect.scaleX = s.scaleX ?? 1;
+      rect.scaleY = s.scaleY ?? 1;
+
+      (rect as any).data = s.data;
+
+      canvas.add(rect);
+
+      clampFurnitureInsideRoom(rect as any, room);
+      snapFurnitureToRoomGrid(rect as any, room, GRID_SIZE);
+      rect.setCoords();
+    }
+
+    canvas.discardActiveObject();
+    onSelectionChangeRef.current?.(null);
+    canvas.requestRenderAll();
+
+    isApplyingHistoryRef.current = false;
+  };
+
+  const undo = () => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current -= 1;
+    restoreState(canvas, room, historyRef.current[historyIndexRef.current]);
+  };
+
+  const redo = () => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    historyIndexRef.current += 1;
+    restoreState(canvas, room, historyRef.current[historyIndexRef.current]);
+  };
 
   useEffect(() => {
     if (!htmlCanvasRef.current) return;
@@ -101,9 +255,7 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    /* =========================
-       Zoom
-    ========================= */
+    // Zoom
     canvas.on("mouse:wheel", (opt) => {
       const event = opt.e as WheelEvent;
 
@@ -117,9 +269,7 @@ export default forwardRef<
       event.stopPropagation();
     });
 
-    /* =========================
-       Pan (Space + drag)
-    ========================= */
+    // Pan (Space + drag)
     let isPanning = false;
     let lastClientX = 0;
     let lastClientY = 0;
@@ -133,6 +283,11 @@ export default forwardRef<
       canvas.defaultCursor = "grabbing";
       lastClientX = e.clientX;
       lastClientY = e.clientY;
+    });
+
+    canvas.on("mouse:move", () => {
+      if (!isPanning) return;
+      // handled in mouse:move below
     });
 
     canvas.on("mouse:move", (opt) => {
@@ -154,9 +309,7 @@ export default forwardRef<
       canvas.defaultCursor = "default";
     });
 
-    /* =========================
-       Selection -> React
-    ========================= */
+    // Selection -> React
     const emitSelection = () => {
       const active = canvas.getActiveObject();
 
@@ -170,11 +323,9 @@ export default forwardRef<
 
     canvas.on("selection:created", emitSelection);
     canvas.on("selection:updated", emitSelection);
-    canvas.on("selection:cleared", () => {
-      onSelectionChangeRef.current?.(null);
-    });
+    canvas.on("selection:cleared", () => onSelectionChangeRef.current?.(null));
 
-    // keep panel updated while transforming
+    // keep panel updated during transforms
     canvas.on("object:scaling", emitSelection);
     canvas.on("object:rotating", emitSelection);
 
@@ -182,11 +333,10 @@ export default forwardRef<
       const obj = opt.target as any;
       if (!obj || !isFurniture(obj)) return;
 
-      // clamp while moving
       obj.setCoords();
       room.setCoords();
-      clampFurnitureInsideRoom(obj, room);
 
+      clampFurnitureInsideRoom(obj, room);
       emitSelection();
     });
 
@@ -200,18 +350,36 @@ export default forwardRef<
       obj.setCoords();
       emitSelection();
       canvas.requestRenderAll();
+
+      pushHistory(canvas);
     });
 
-    /* =========================
-       Keyboard
-    ========================= */
+    // Keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Space for panning
       if (e.code === "Space") {
         isSpacePressedRef.current = true;
         canvas.defaultCursor = "grab";
       }
 
-      // Delete selected furniture
+      // Undo / Redo
+      const isMac = navigator.platform.toLowerCase().includes("mac");
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+
+      if (mod && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
+      // Delete selected
       if (e.key === "Delete" || e.key === "Backspace") {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -223,6 +391,8 @@ export default forwardRef<
         canvas.discardActiveObject();
         onSelectionChangeRef.current?.(null);
         canvas.requestRenderAll();
+
+        pushHistory(canvas);
       }
     };
 
@@ -235,6 +405,9 @@ export default forwardRef<
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+
+    // Initial history snapshot
+    pushHistory(canvas);
 
     canvas.requestRenderAll();
 
@@ -249,9 +422,7 @@ export default forwardRef<
     };
   }, []);
 
-  /* =========================
-     Exposed Canvas API
-  ========================= */
+  // Exposed API to parent
   useImperativeHandle(
     ref,
     (): PlannerCanvasHandle => {
@@ -278,7 +449,10 @@ export default forwardRef<
         addFurniture(type) {
           const canvas = getCanvas();
           const room = getRoom();
+
           addFurniture(canvas, room, type);
+
+          pushHistory(canvas);
         },
 
         deleteSelected() {
@@ -290,6 +464,8 @@ export default forwardRef<
           canvas.discardActiveObject();
           onSelectionChangeRef.current?.(null);
           canvas.requestRenderAll();
+
+          pushHistory(canvas);
         },
 
         duplicateSelected() {
@@ -315,7 +491,11 @@ export default forwardRef<
             angle: active.angle ?? 0,
           });
 
-          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry)
+            rect.set({ rx: active.rx, ry: active.ry });
+
+          rect.scaleX = active.scaleX ?? 1;
+          rect.scaleY = active.scaleY ?? 1;
 
           (rect as any).data = {
             kind: "furniture",
@@ -333,6 +513,8 @@ export default forwardRef<
           canvas.requestRenderAll();
 
           onSelectionChangeRef.current?.(getSelectedInfo(rect as any));
+
+          pushHistory(canvas);
         },
 
         setSelectedProps(patch) {
@@ -341,6 +523,7 @@ export default forwardRef<
           const active = getActiveFurniture();
           if (!active) return;
 
+          // width/height are "actual" sizes shown in panel
           if (typeof patch.width === "number" && patch.width > 1) {
             const current = active.getBoundingRect(false, true).width;
             const factor = patch.width / Math.max(1, current);
@@ -367,6 +550,8 @@ export default forwardRef<
           canvas.requestRenderAll();
 
           onSelectionChangeRef.current?.(getSelectedInfo(active));
+
+          pushHistory(canvas);
         },
 
         fitRoom() {
@@ -374,9 +559,17 @@ export default forwardRef<
           const room = getRoom();
           fitRoomToView(canvas, room);
         },
+
+        undo() {
+          undo();
+        },
+
+        redo() {
+          redo();
+        },
       };
     },
-    [] // ✅ important: don’t recreate handle on every render
+    []
   );
 
   return (
@@ -397,12 +590,9 @@ function drawRoom(canvas: Canvas) {
   const width = 600 - strokeWidth;
   const height = 400 - strokeWidth;
 
-  const left = 200;
-  const top = 150;
-
   const room = new Rect({
-    left,
-    top,
+    left: 200,
+    top: 150,
     width,
     height,
     fill: "rgba(59,130,246,0.15)",
@@ -508,7 +698,7 @@ function addFurniture(canvas: Canvas, room: Rect, type: FurnitureType) {
   const innerLeft = roomRect.left + inset;
   const innerTop = roomRect.top + inset;
   const innerRight = roomRect.left + roomRect.width - inset;
-  const innerBottom = roomRect.top + roomRect.height - inset;
+  const innerBottom = roomRect.top + inset + (roomRect.height - inset * 2);
 
   let width: number;
   let height: number;

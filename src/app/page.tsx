@@ -72,7 +72,7 @@ export default function HomePage() {
     <main className="w-screen h-screen grid grid-cols-[320px_1fr] bg-neutral-100">
       <aside className="p-4 border-r border-neutral-300 bg-white flex flex-col gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-neutral-700">Planner</h1>
+          <h1 className="text-xl font-semibold">Planner</h1>
           <p className="text-sm text-neutral-500">
             Scroll = zoom • Hold <b>Space</b> = pan • Select item to edit
           </p>
@@ -91,6 +91,15 @@ export default function HomePage() {
               Add Chair
             </button>
           </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button type="button" className={btnSecondaryEnabled} onClick={() => canvasRef.current?.undo()}>
+            Undo
+          </button>
+          <button type="button" className={btnSecondaryEnabled} onClick={() => canvasRef.current?.redo()}>
+            Redo
+          </button>
         </div>
 
         <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
@@ -167,13 +176,12 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* Always enabled + clearly visible */}
         <button type="button" className={btnPrimary} onClick={() => canvasRef.current?.fitRoom()}>
           Fit room to view
         </button>
 
         <div className="mt-auto text-xs text-neutral-500">
-          Pro tip: Use Delete / Backspace to remove selected item.
+          Pro tip: Ctrl/Cmd+Z undo • Ctrl/Cmd+Shift+Z redo • Delete removes selected
         </div>
       </aside>
 
