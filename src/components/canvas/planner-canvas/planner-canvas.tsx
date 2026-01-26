@@ -1,11 +1,6 @@
 "use client";
 
-import React, {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from "react";
+import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { Canvas, Line, Rect } from "fabric";
 
 const GRID_SIZE = 50;
@@ -13,6 +8,8 @@ const GRID_SIZE = 50;
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 3;
 const ZOOM_SENSITIVITY = 0.999;
+
+const STORAGE_KEY = "planner:v1";
 
 type FurnitureType = "sofa" | "table" | "chair";
 
@@ -37,6 +34,12 @@ export type PlannerCanvasHandle = {
 
   undo: () => void;
   redo: () => void;
+
+  // NEW: persistence
+  save: () => void;
+  load: () => void;
+  exportJson: () => void;
+  importJsonString: (json: string) => void;
 };
 
 function makeId() {
@@ -64,7 +67,7 @@ function getSelectedInfo(obj: any): SelectedInfo {
   };
 }
 
-/** A plain snapshot for Rect furniture (serializable, no Fabric instances) */
+/** Snapshot for furniture only (serializable, stable). */
 type FurnitureSnapshot = {
   left: number;
   top: number;
@@ -78,13 +81,19 @@ type FurnitureSnapshot = {
   strokeWidth?: number;
   scaleX?: number;
   scaleY?: number;
-  data: { kind: "furniture"; type: FurnitureType | "unknown"; id: string };
+  data: {
+    kind: "furniture";
+    type: FurnitureType | "unknown";
+    id: string;
+    baseStroke?: string;
+    baseStrokeWidth?: number;
+  };
 };
 
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+  >(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
@@ -101,35 +110,64 @@ export default forwardRef<
   const historyIndexRef = useRef<number>(-1);
   const isApplyingHistoryRef = useRef(false);
 
+  // Autosave debounce
+  const autosaveTimerRef = useRef<number | null>(null);
+
+  // ---- Visual Styles (hover / active) ----
+  const ACTIVE_STROKE = "#0f172a";
+  const ACTIVE_STROKE_WIDTH = 3;
+
+  const HOVER_STROKE = "#2563eb";
+  const HOVER_STROKE_WIDTH = 3;
+
   const serializeState = (canvas: Canvas) => {
     const items = canvas
       .getObjects()
       .filter((o: any) => o?.data?.kind === "furniture")
-      .map(
-        (o: any): FurnitureSnapshot => ({
-          left: o.left ?? 0,
-          top: o.top ?? 0,
-          width: o.width ?? 0,
-          height: o.height ?? 0,
-          angle: o.angle ?? 0,
-          rx: o.rx,
-          ry: o.ry,
-          fill: o.fill,
-          stroke: o.stroke,
-          strokeWidth: o.strokeWidth ?? 2,
-          scaleX: o.scaleX ?? 1,
-          scaleY: o.scaleY ?? 1,
-          data: {
-            kind: "furniture",
-            type: o.data?.type ?? "unknown",
-            id: o.data?.id ?? makeId(),
-          },
-        })
-      );
+      .map((o: any): FurnitureSnapshot => ({
+        left: o.left ?? 0,
+        top: o.top ?? 0,
+        width: o.width ?? 0,
+        height: o.height ?? 0,
+        angle: o.angle ?? 0,
+        rx: o.rx,
+        ry: o.ry,
+        fill: o.fill,
+        stroke: o.stroke,
+        strokeWidth: o.strokeWidth ?? 2,
+        scaleX: o.scaleX ?? 1,
+        scaleY: o.scaleY ?? 1,
+        data: {
+          kind: "furniture",
+          type: o.data?.type ?? "unknown",
+          id: o.data?.id ?? makeId(),
+          baseStroke: o.data?.baseStroke ?? o.stroke ?? "#10b981",
+          baseStrokeWidth: o.data?.baseStrokeWidth ?? o.strokeWidth ?? 2,
+        },
+      }));
 
-    // stable ordering by id (prevents random diffs)
+    // stable ordering by id prevents random diffs
     items.sort((a, b) => a.data.id.localeCompare(b.data.id));
     return JSON.stringify(items);
+  };
+
+  const scheduleAutosave = () => {
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    autosaveTimerRef.current = window.setTimeout(() => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return;
+
+      try {
+        const json = serializeState(canvas);
+        localStorage.setItem(STORAGE_KEY, json);
+      } catch {
+        // ignore
+      }
+    }, 350);
   };
 
   const pushHistory = (canvas: Canvas) => {
@@ -140,10 +178,7 @@ export default forwardRef<
     if (current === snapshot) return;
 
     // cut redo stack
-    historyRef.current = historyRef.current.slice(
-      0,
-      historyIndexRef.current + 1
-    );
+    historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
 
     historyRef.current.push(snapshot);
     historyIndexRef.current = historyRef.current.length - 1;
@@ -154,12 +189,15 @@ export default forwardRef<
       historyRef.current.shift();
       historyIndexRef.current--;
     }
+
+    // autosave after meaningful change
+    scheduleAutosave();
   };
 
-  const restoreState = (canvas: Canvas, room: Rect, json: string) => {
+  const restoreFromJson = (canvas: Canvas, room: Rect, json: string) => {
     isApplyingHistoryRef.current = true;
 
-    // remove existing furniture
+    // remove furniture only
     canvas.getObjects().forEach((o: any) => {
       if (o?.data?.kind === "furniture") canvas.remove(o);
     });
@@ -182,6 +220,7 @@ export default forwardRef<
         lockScalingFlip: true,
         transparentCorners: false,
         angle: s.angle ?? 0,
+        hoverCursor: "move",
       });
 
       if (typeof s.rx === "number" && typeof s.ry === "number") {
@@ -214,7 +253,8 @@ export default forwardRef<
 
     if (historyIndexRef.current <= 0) return;
     historyIndexRef.current -= 1;
-    restoreState(canvas, room, historyRef.current[historyIndexRef.current]);
+    restoreFromJson(canvas, room, historyRef.current[historyIndexRef.current]);
+    scheduleAutosave();
   };
 
   const redo = () => {
@@ -224,7 +264,108 @@ export default forwardRef<
 
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
     historyIndexRef.current += 1;
-    restoreState(canvas, room, historyRef.current[historyIndexRef.current]);
+    restoreFromJson(canvas, room, historyRef.current[historyIndexRef.current]);
+    scheduleAutosave();
+  };
+
+  // ---- Styling helpers (no history) ----
+  const resetToBaseStyle = (obj: any) => {
+    if (!isFurniture(obj)) return;
+
+    const baseStroke = obj.data?.baseStroke ?? "#10b981";
+    const baseStrokeWidth = obj.data?.baseStrokeWidth ?? 2;
+
+    obj.set({
+      stroke: baseStroke,
+      strokeWidth: baseStrokeWidth,
+    });
+  };
+
+  const applyHoverStyle = (obj: any) => {
+    if (!isFurniture(obj)) return;
+    obj.set({ stroke: HOVER_STROKE, strokeWidth: HOVER_STROKE_WIDTH });
+  };
+
+  const applyActiveStyle = (obj: any) => {
+    if (!isFurniture(obj)) return;
+    obj.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
+  };
+
+  const restyleAllFurniture = (canvas: Canvas) => {
+    const active = canvas.getActiveObject() as any;
+
+    canvas.getObjects().forEach((o: any) => {
+      if (!isFurniture(o)) return;
+
+      if (active && o === active) applyActiveStyle(o);
+      else resetToBaseStyle(o);
+
+      o.setCoords();
+    });
+
+    canvas.requestRenderAll();
+  };
+
+  // Persistence helpers (buttons)
+  const saveNow = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const json = serializeState(canvas);
+    localStorage.setItem(STORAGE_KEY, json);
+  };
+
+  const loadNow = () => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    const json = localStorage.getItem(STORAGE_KEY);
+    if (!json) return;
+
+    // restore + reset history to this state
+    restoreFromJson(canvas, room, json);
+    restyleAllFurniture(canvas);
+
+    historyRef.current = [json];
+    historyIndexRef.current = 0;
+
+    scheduleAutosave();
+  };
+
+  const exportJson = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const json = serializeState(canvas);
+
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "planner-layout.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  };
+
+  const importJsonString = (json: string) => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    restoreFromJson(canvas, room, json);
+    restyleAllFurniture(canvas);
+
+    // reset history to imported state
+    historyRef.current = [json];
+    historyIndexRef.current = 0;
+
+    // persist it
+    localStorage.setItem(STORAGE_KEY, json);
   };
 
   useEffect(() => {
@@ -285,11 +426,6 @@ export default forwardRef<
       lastClientY = e.clientY;
     });
 
-    canvas.on("mouse:move", () => {
-      if (!isPanning) return;
-      // handled in mouse:move below
-    });
-
     canvas.on("mouse:move", (opt) => {
       if (!isPanning) return;
 
@@ -321,9 +457,45 @@ export default forwardRef<
       onSelectionChangeRef.current?.(getSelectedInfo(active));
     };
 
-    canvas.on("selection:created", emitSelection);
-    canvas.on("selection:updated", emitSelection);
-    canvas.on("selection:cleared", () => onSelectionChangeRef.current?.(null));
+    canvas.on("selection:created", () => {
+      emitSelection();
+      restyleAllFurniture(canvas);
+    });
+
+    canvas.on("selection:updated", () => {
+      emitSelection();
+      restyleAllFurniture(canvas);
+    });
+
+    canvas.on("selection:cleared", () => {
+      onSelectionChangeRef.current?.(null);
+      restyleAllFurniture(canvas);
+    });
+
+    // Hover
+    canvas.on("mouse:over", (opt) => {
+      const t = opt.target as any;
+      if (!t || !isFurniture(t)) return;
+
+      const active = canvas.getActiveObject() as any;
+      if (active && active === t) return;
+
+      applyHoverStyle(t);
+      t.setCoords();
+      canvas.requestRenderAll();
+    });
+
+    canvas.on("mouse:out", (opt) => {
+      const t = opt.target as any;
+      if (!t || !isFurniture(t)) return;
+
+      const active = canvas.getActiveObject() as any;
+      if (active && active === t) return;
+
+      resetToBaseStyle(t);
+      t.setCoords();
+      canvas.requestRenderAll();
+    });
 
     // keep panel updated during transforms
     canvas.on("object:scaling", emitSelection);
@@ -349,6 +521,7 @@ export default forwardRef<
 
       obj.setCoords();
       emitSelection();
+      restyleAllFurniture(canvas);
       canvas.requestRenderAll();
 
       pushHistory(canvas);
@@ -356,13 +529,11 @@ export default forwardRef<
 
     // Keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Space for panning
       if (e.code === "Space") {
         isSpacePressedRef.current = true;
         canvas.defaultCursor = "grab";
       }
 
-      // Undo / Redo
       const isMac = navigator.platform.toLowerCase().includes("mac");
       const mod = isMac ? e.metaKey : e.ctrlKey;
 
@@ -370,16 +541,17 @@ export default forwardRef<
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
+        restyleAllFurniture(canvas);
         return;
       }
 
       if (mod && e.key.toLowerCase() === "y") {
         e.preventDefault();
         redo();
+        restyleAllFurniture(canvas);
         return;
       }
 
-      // Delete selected
       if (e.key === "Delete" || e.key === "Backspace") {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -390,6 +562,7 @@ export default forwardRef<
         canvas.remove(active);
         canvas.discardActiveObject();
         onSelectionChangeRef.current?.(null);
+        restyleAllFurniture(canvas);
         canvas.requestRenderAll();
 
         pushHistory(canvas);
@@ -409,6 +582,21 @@ export default forwardRef<
     // Initial history snapshot
     pushHistory(canvas);
 
+    // Try autoload once on start
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        restoreFromJson(canvas, room, saved);
+        restyleAllFurniture(canvas);
+        historyRef.current = [saved];
+        historyIndexRef.current = 0;
+      } catch {
+        // ignore broken data
+      }
+    } else {
+      restyleAllFurniture(canvas);
+    }
+
     canvas.requestRenderAll();
 
     return () => {
@@ -416,13 +604,17 @@ export default forwardRef<
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
 
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+
       canvas.dispose();
       fabricCanvasRef.current = null;
       roomRef.current = null;
     };
   }, []);
 
-  // Exposed API to parent
   useImperativeHandle(
     ref,
     (): PlannerCanvasHandle => {
@@ -451,7 +643,7 @@ export default forwardRef<
           const room = getRoom();
 
           addFurniture(canvas, room, type);
-
+          restyleAllFurniture(canvas);
           pushHistory(canvas);
         },
 
@@ -463,6 +655,7 @@ export default forwardRef<
           canvas.remove(active);
           canvas.discardActiveObject();
           onSelectionChangeRef.current?.(null);
+          restyleAllFurniture(canvas);
           canvas.requestRenderAll();
 
           pushHistory(canvas);
@@ -489,10 +682,10 @@ export default forwardRef<
             lockScalingFlip: true,
             transparentCorners: false,
             angle: active.angle ?? 0,
+            hoverCursor: "move",
           });
 
-          if (active.rx && active.ry)
-            rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
 
           rect.scaleX = active.scaleX ?? 1;
           rect.scaleY = active.scaleY ?? 1;
@@ -501,6 +694,8 @@ export default forwardRef<
             kind: "furniture",
             type: active.data?.type ?? "unknown",
             id: makeId(),
+            baseStroke: active.data?.baseStroke ?? "#10b981",
+            baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
           };
 
           canvas.add(rect);
@@ -510,10 +705,11 @@ export default forwardRef<
 
           rect.setCoords();
           canvas.setActiveObject(rect);
-          canvas.requestRenderAll();
 
           onSelectionChangeRef.current?.(getSelectedInfo(rect as any));
+          restyleAllFurniture(canvas);
 
+          canvas.requestRenderAll();
           pushHistory(canvas);
         },
 
@@ -523,7 +719,6 @@ export default forwardRef<
           const active = getActiveFurniture();
           if (!active) return;
 
-          // width/height are "actual" sizes shown in panel
           if (typeof patch.width === "number" && patch.width > 1) {
             const current = active.getBoundingRect(false, true).width;
             const factor = patch.width / Math.max(1, current);
@@ -547,6 +742,7 @@ export default forwardRef<
           snapFurnitureToRoomGrid(active, room, GRID_SIZE);
 
           active.setCoords();
+          restyleAllFurniture(canvas);
           canvas.requestRenderAll();
 
           onSelectionChangeRef.current?.(getSelectedInfo(active));
@@ -558,14 +754,35 @@ export default forwardRef<
           const canvas = getCanvas();
           const room = getRoom();
           fitRoomToView(canvas, room);
+          restyleAllFurniture(canvas);
         },
 
         undo() {
           undo();
+          const canvas = fabricCanvasRef.current;
+          if (canvas) restyleAllFurniture(canvas);
         },
 
         redo() {
           redo();
+          const canvas = fabricCanvasRef.current;
+          if (canvas) restyleAllFurniture(canvas);
+        },
+
+        save() {
+          saveNow();
+        },
+
+        load() {
+          loadNow();
+        },
+
+        exportJson() {
+          exportJson();
+        },
+
+        importJsonString(json: string) {
+          importJsonString(json);
         },
       };
     },
@@ -719,25 +936,35 @@ function addFurniture(canvas: Canvas, room: Rect, type: FurnitureType) {
   const spawnLeft = innerLeft + (innerRight - innerLeft) / 2;
   const spawnTop = innerTop + (innerBottom - innerTop) / 2;
 
+  const baseStroke = "#10b981";
+  const baseStrokeWidth = 2;
+
   const obj = new Rect({
     left: spawnLeft,
     top: spawnTop,
     width,
     height,
     fill: "rgba(16,185,129,0.25)",
-    stroke: "#10b981",
-    strokeWidth: 2,
+    stroke: baseStroke,
+    strokeWidth: baseStrokeWidth,
     selectable: true,
     evented: true,
     hasControls: true,
     hasBorders: true,
     lockScalingFlip: true,
     transparentCorners: false,
+    hoverCursor: "move",
   });
 
   if (rounded) obj.set({ rx: 10, ry: 10 });
 
-  (obj as any).data = { kind: "furniture", type, id: makeId() };
+  (obj as any).data = {
+    kind: "furniture",
+    type,
+    id: makeId(),
+    baseStroke,
+    baseStrokeWidth,
+  };
 
   canvas.add(obj);
 

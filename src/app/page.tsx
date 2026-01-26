@@ -12,7 +12,7 @@ const btnAdd =
 const btnPrimary =
   "px-3 py-2 rounded bg-neutral-900 text-white hover:bg-neutral-800 active:bg-neutral-700 transition-colors text-sm";
 
-const btnSecondaryEnabled =
+const btnSecondary =
   "px-3 py-2 rounded border border-neutral-400 bg-white text-neutral-900 hover:bg-neutral-100 active:bg-neutral-200 transition-colors text-sm";
 
 const btnSecondaryDisabled =
@@ -26,6 +26,8 @@ const btnDangerDisabled =
 
 export default function HomePage() {
   const canvasRef = useRef<PlannerCanvasHandle | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [selected, setSelected] = useState<SelectedInfo | null>(null);
 
   const [w, setW] = useState("");
@@ -68,36 +70,97 @@ export default function HomePage() {
 
   const isDisabled = selected === null;
 
+  const onImportClick = () => fileInputRef.current?.click();
+
+  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const text = await file.text();
+    canvasRef.current?.importJsonString(text);
+
+    // reset input so you can re-import the same file again
+    e.target.value = "";
+  };
+
   return (
-    <main className="w-screen h-screen grid grid-cols-[320px_1fr] bg-neutral-100">
+    <main className="w-screen h-screen grid grid-cols-[340px_1fr] bg-neutral-100">
       <aside className="p-4 border-r border-neutral-300 bg-white flex flex-col gap-4">
         <div>
-          <h1 className="text-xl font-semibold">Planner</h1>
+          <h1 className="text-xl font-semibold text-neutral-700">Planner</h1>
           <p className="text-sm text-neutral-500">
-            Scroll = zoom • Hold <b>Space</b> = pan • Select item to edit
+            Scroll = zoom • Hold <b>Space</b> = pan • Ctrl/Cmd+Z undo
+          </p>
+          <p className="text-xs text-neutral-400 mt-1">
+            Autosave is enabled (local browser storage).
           </p>
         </div>
 
         <div className="flex flex-col gap-2">
           <div className="text-sm font-semibold text-neutral-700">Add furniture</div>
           <div className="flex flex-col gap-2">
-            <button type="button" className={btnAdd} onClick={() => canvasRef.current?.addFurniture("sofa")}>
+            <button
+              type="button"
+              className={btnAdd}
+              onClick={() => canvasRef.current?.addFurniture("sofa")}
+            >
               Add Sofa
             </button>
-            <button type="button" className={btnAdd} onClick={() => canvasRef.current?.addFurniture("table")}>
+            <button
+              type="button"
+              className={btnAdd}
+              onClick={() => canvasRef.current?.addFurniture("table")}
+            >
               Add Table
             </button>
-            <button type="button" className={btnAdd} onClick={() => canvasRef.current?.addFurniture("chair")}>
+            <button
+              type="button"
+              className={btnAdd}
+              onClick={() => canvasRef.current?.addFurniture("chair")}
+            >
               Add Chair
             </button>
           </div>
         </div>
 
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+          <div className="text-sm font-semibold text-neutral-700 mb-2">
+            Project
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.save()}>
+              Save
+            </button>
+            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.load()}>
+              Load
+            </button>
+            <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.exportJson()}>
+              Export JSON
+            </button>
+            <button type="button" className={btnSecondary} onClick={onImportClick}>
+              Import JSON
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={onFilePicked}
+            />
+          </div>
+
+          <p className="text-xs text-neutral-500 mt-2">
+            Export creates a file you can send to a client. Import restores it.
+          </p>
+        </div>
+
         <div className="flex gap-2">
-          <button type="button" className={btnSecondaryEnabled} onClick={() => canvasRef.current?.undo()}>
+          <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.undo()}>
             Undo
           </button>
-          <button type="button" className={btnSecondaryEnabled} onClick={() => canvasRef.current?.redo()}>
+          <button type="button" className={btnSecondary} onClick={() => canvasRef.current?.redo()}>
             Redo
           </button>
         </div>
@@ -156,7 +219,7 @@ export default function HomePage() {
 
                 <button
                   type="button"
-                  className={isDisabled ? btnSecondaryDisabled : btnSecondaryEnabled}
+                  className={isDisabled ? btnSecondaryDisabled : btnSecondary}
                   disabled={isDisabled}
                   onClick={() => canvasRef.current?.duplicateSelected()}
                 >
@@ -181,7 +244,7 @@ export default function HomePage() {
         </button>
 
         <div className="mt-auto text-xs text-neutral-500">
-          Pro tip: Ctrl/Cmd+Z undo • Ctrl/Cmd+Shift+Z redo • Delete removes selected
+          Pro tip: Autosave is local. Export/Import is the “shareable” format.
         </div>
       </aside>
 
