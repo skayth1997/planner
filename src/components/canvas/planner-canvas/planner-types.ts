@@ -12,6 +12,8 @@ export type SelectedInfo = {
   angle: number;
 };
 
+export type RoomSize = { width: number; height: number };
+
 export type PlannerCanvasHandle = {
   addFurniture: (type: FurnitureType) => void;
   deleteSelected: () => void;
@@ -31,8 +33,12 @@ export type PlannerCanvasHandle = {
   importJsonString: (json: string) => void;
 
   // NEW
-  setGridVisible: (visible: boolean) => void;
-  setGridSize: (size: number) => void;
+  getRoomSize: () => RoomSize;
+  setRoomSize: (size: RoomSize) => void;
+
+  // optional (you already have these implemented in canvas)
+  setGridVisible?: (visible: boolean) => void;
+  setGridSize?: (size: number) => void;
 };
 
 export type FurnitureSnapshot = {

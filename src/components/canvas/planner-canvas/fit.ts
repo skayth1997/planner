@@ -1,6 +1,6 @@
-import type { Canvas, Rect } from "fabric";
+import type { Canvas } from "fabric";
 
-export function fitRoomToView(canvas: Canvas, room: Rect, padding = 40) {
+export function fitRoomToView(canvas: Canvas, room: any, padding = 40) {
   const roomRect = room.getBoundingRect();
 
   const viewWidth = canvas.getWidth();

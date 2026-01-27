@@ -1,12 +1,7 @@
 "use client";
 
-import React, {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from "react";
-import { Canvas, Rect, Line } from "fabric";
+import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { Canvas, Rect, Line, Polygon, Circle } from "fabric";
 
 import {
   GRID_SIZE,
@@ -18,6 +13,7 @@ import {
   HOVER_STROKE,
   HOVER_STROKE_WIDTH,
   STORAGE_KEY,
+  STORAGE_ROOM_KEY,
 } from "./planner-constants";
 
 import type {
@@ -25,10 +21,10 @@ import type {
   SelectedInfo,
   FurnitureType,
   GuideLine,
+  RoomSize,
 } from "./planner-types";
 
 import { isFurniture, getSelectedInfo, makeId } from "./utils";
-import { drawRoom } from "./room";
 import {
   addFurniture,
   clampFurnitureInsideRoom,
@@ -44,6 +40,15 @@ import {
   importJsonString as importJson,
 } from "./persistence";
 
+import {
+  createRoomPolygon,
+  createCornerHandles,
+  attachWallEditing,
+  getRoomPoints,
+  setRoomPoints,
+  syncHandlesToRoom,
+} from "./room-walls";
+
 /** Render throttling: at most 1 render per animation frame */
 function createRenderScheduler(canvas: Canvas) {
   let raf: number | null = null;
@@ -56,7 +61,7 @@ function createRenderScheduler(canvas: Canvas) {
   };
 }
 
-function drawGridLines(canvas: Canvas, room: Rect, gridSize: number) {
+function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
   const lines: Line[] = [];
 
   const roomRect = room.getBoundingRect();
@@ -96,11 +101,15 @@ function drawGridLines(canvas: Canvas, room: Rect, gridSize: number) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+  >(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const fabricCanvasRef = useRef<Canvas | null>(null);
-  const roomRef = useRef<Rect | null>(null);
+
+  // ROOM is polygon now
+  const roomRef = useRef<Polygon | null>(null);
+  const roomHandlesRef = useRef<Circle[]>([]);
 
   const isSpacePressedRef = useRef(false);
   const isShiftPressedRef = useRef(false);
@@ -115,7 +124,7 @@ export default forwardRef<
   const autosaveTimerRef = useRef<number | null>(null);
   const isApplyingHistoryRef = useRef(false);
 
-  // render refs
+  // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
   // grid state
@@ -145,11 +154,17 @@ export default forwardRef<
 
     autosaveTimerRef.current = window.setTimeout(() => {
       const canvas = fabricCanvasRef.current;
-      if (!canvas) return;
+      const room = roomRef.current;
+      if (!canvas || !room) return;
 
       try {
+        // items
         const json = serializeState(canvas);
         localStorage.setItem(STORAGE_KEY, json);
+
+        // room points
+        const pts = getRoomPoints(room);
+        localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
       } catch {}
     }, 350);
   };
@@ -163,7 +178,7 @@ export default forwardRef<
       const baseStroke = o.data?.baseStroke ?? "#10b981";
       const baseStrokeWidth = o.data?.baseStrokeWidth ?? 2;
 
-      // Note: with multi-select, active is an ActiveSelection; we keep normal strokes.
+      // With multi-select, active is ActiveSelection; keep normal strokes
       if (active && o === active) {
         o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
       } else {
@@ -188,8 +203,14 @@ export default forwardRef<
     const room = roomRef.current;
     if (!canvas || !room) return;
 
+    // room below furniture
     canvas.sendObjectToBack(room);
+
+    // grid below room (since it is inside room area, bottommost is fine)
     for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
+
+    // handles above everything
+    for (const h of roomHandlesRef.current) canvas.bringObjectToFront(h);
   };
 
   const rebuildGrid = () => {
@@ -202,8 +223,6 @@ export default forwardRef<
 
     if (gridVisibleRef.current) {
       gridLinesRef.current = drawGridLines(canvas, room, gridSizeRef.current);
-      for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
-      canvas.sendObjectToBack(room);
     }
 
     restackFixedBackground();
@@ -233,7 +252,7 @@ export default forwardRef<
     isApplyingHistoryRef.current = true;
     restoreFromJson(
       canvas,
-      room,
+      room as any,
       historyRef.current[historyIndexRef.current],
       () => onSelectionChangeRef.current?.(null)
     );
@@ -256,7 +275,7 @@ export default forwardRef<
     isApplyingHistoryRef.current = true;
     restoreFromJson(
       canvas,
-      room,
+      room as any,
       historyRef.current[historyIndexRef.current],
       () => onSelectionChangeRef.current?.(null)
     );
@@ -274,10 +293,22 @@ export default forwardRef<
     const active: any = canvas.getActiveObject();
     if (!active) return [];
 
-    const objs: any[] = Array.isArray(active?._objects)
-      ? active._objects
-      : [active];
+    const objs: any[] = Array.isArray(active?._objects) ? active._objects : [active];
     return objs.filter((o) => isFurniture(o));
+  };
+
+  const emitSelection = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const selected = getSelectedFurnitureObjects(canvas);
+
+    if (selected.length === 0) {
+      onSelectionChangeRef.current?.(null);
+      return;
+    }
+
+    onSelectionChangeRef.current?.(getSelectedInfo(selected[0]));
   };
 
   const cloneSelectedToClipboard = () => {
@@ -357,8 +388,8 @@ export default forwardRef<
 
       canvas.add(rect);
 
-      clampFurnitureInsideRoom(rect as any, room);
-      snapFurnitureToRoomGrid(rect as any, room, grid);
+      clampFurnitureInsideRoom(rect as any, room as any);
+      snapFurnitureToRoomGrid(rect as any, room as any, grid);
 
       rect.setCoords();
       clones.push(rect);
@@ -385,20 +416,6 @@ export default forwardRef<
 
     pushHistoryNow(canvas);
     safeRender();
-  };
-
-  const emitSelection = () => {
-    const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    const selected = getSelectedFurnitureObjects(canvas);
-
-    if (selected.length === 0) {
-      onSelectionChangeRef.current?.(null);
-      return;
-    }
-
-    onSelectionChangeRef.current?.(getSelectedInfo(selected[0]));
   };
 
   const scheduleNudgeCommit = () => {
@@ -430,7 +447,7 @@ export default forwardRef<
         top: (o.top ?? 0) + dy,
       });
       o.setCoords();
-      if (!skipClamp) clampFurnitureInsideRoom(o, room);
+      if (!skipClamp) clampFurnitureInsideRoom(o, room as any);
       o.setCoords();
     }
 
@@ -475,6 +492,58 @@ export default forwardRef<
     pushHistoryNow(canvas);
   };
 
+  // ===== Room API (based on polygon bounding box) =====
+  const getRoomSizeInternal = (): RoomSize => {
+    const room = roomRef.current;
+    if (!room) return { width: 0, height: 0 };
+
+    const r = room.getBoundingRect();
+    return { width: Math.round(r.width), height: Math.round(r.height) };
+  };
+
+  const setRoomSizeInternal = (size: RoomSize) => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    const min = 200;
+
+    const targetW = Math.max(min, Math.round(Number(size.width)));
+    const targetH = Math.max(min, Math.round(Number(size.height)));
+
+    const r = room.getBoundingRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+
+    const left = cx - targetW / 2;
+    const top = cy - targetH / 2;
+
+    const pts = [
+      { x: left, y: top },
+      { x: left + targetW, y: top },
+      { x: left + targetW, y: top + targetH },
+      { x: left, y: top + targetH },
+    ];
+
+    setRoomPoints(room, pts);
+    syncHandlesToRoom(roomHandlesRef.current, room);
+
+    rebuildGrid();
+
+    canvas.getObjects().forEach((o: any) => {
+      if (!isFurniture(o)) return;
+      clampFurnitureInsideRoom(o, room as any);
+      o.setCoords();
+    });
+
+    fitRoomToView(canvas, room);
+    clearGuides(canvas, guidesRef);
+    safeRender();
+
+    localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+    pushHistoryNow(canvas);
+  };
+
   useEffect(() => {
     if (!htmlCanvasRef.current) return;
 
@@ -489,8 +558,58 @@ export default forwardRef<
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
 
-    const room = drawRoom(canvas);
+    // === Create room polygon + handles ===
+    const room = createRoomPolygon(canvas);
     roomRef.current = room;
+
+    // Load saved room points (if any)
+    const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
+    if (savedRoom) {
+      try {
+        const parsed = JSON.parse(savedRoom);
+        if (parsed?.points && Array.isArray(parsed.points)) {
+          const pts = parsed.points
+            .filter((p: any) => p && typeof p.x === "number" && typeof p.y === "number")
+            .map((p: any) => ({ x: p.x, y: p.y }));
+
+          if (pts.length >= 3) {
+            setRoomPoints(room, pts);
+          }
+        }
+      } catch {}
+    }
+
+    const handles = createCornerHandles(canvas, room);
+    roomHandlesRef.current = handles;
+
+    attachWallEditing({
+      canvas,
+      room,
+      handles,
+      onRoomChanging: () => {
+        rebuildGrid();
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          clampFurnitureInsideRoom(o, room as any);
+          o.setCoords();
+        });
+
+        clearGuides(canvas, guidesRef);
+        safeRender();
+      },
+      onRoomChanged: () => {
+        fitRoomToView(canvas, room);
+        rebuildGrid();
+        pushHistoryNow(canvas);
+
+        // persist points
+        try {
+          const pts = getRoomPoints(room);
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+        } catch {}
+      },
+    });
 
     rebuildGrid();
 
@@ -508,6 +627,7 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
+    // zoom
     canvas.on("mouse:wheel", (opt) => {
       const event = opt.e as WheelEvent;
 
@@ -522,6 +642,7 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // pan
     let isPanning = false;
     let lastClientX = 0;
     let lastClientY = 0;
@@ -559,6 +680,7 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // selection events
     canvas.on("selection:created", () => {
       emitSelection();
       restyleAllFurniture(canvas);
@@ -580,6 +702,7 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // hover
     canvas.on("mouse:over", (opt) => {
       const t = opt.target as any;
       if (!t || !isFurniture(t)) return;
@@ -606,6 +729,7 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // keep panel updated during transforms
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
       if (!obj || !isFurniture(obj)) {
@@ -657,12 +781,11 @@ export default forwardRef<
       if (!obj || !isFurniture(obj)) return;
 
       obj.setCoords();
-      room.setCoords();
 
-      clampFurnitureInsideRoom(obj, room);
+      clampFurnitureInsideRoom(obj, room as any);
 
       if (!isShiftPressedRef.current) {
-        alignAndGuide(canvas, room, guidesRef, obj);
+        alignAndGuide(canvas, room as any, guidesRef, obj);
       } else {
         clearGuides(canvas, guidesRef);
       }
@@ -677,8 +800,8 @@ export default forwardRef<
 
       const grid = gridSizeRef.current;
 
-      snapFurnitureToRoomGrid(obj, room, grid);
-      clampFurnitureInsideRoom(obj, room);
+      snapFurnitureToRoomGrid(obj, room as any, grid);
+      clampFurnitureInsideRoom(obj, room as any);
 
       obj.setCoords();
       emitSelection();
@@ -689,6 +812,7 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         isSpacePressedRef.current = true;
@@ -700,7 +824,7 @@ export default forwardRef<
       const isMac = navigator.platform.toLowerCase().includes("mac");
       const mod = isMac ? e.metaKey : e.ctrlKey;
 
-      // Layers: [ and ] (NEW)
+      // layers
       if (e.key === "[" || e.key === "]") {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -714,7 +838,7 @@ export default forwardRef<
         return;
       }
 
-      // Arrow key nudge
+      // arrow nudge
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -733,7 +857,7 @@ export default forwardRef<
         return;
       }
 
-      // Copy / Paste
+      // copy / paste
       if (mod && e.key.toLowerCase() === "c") {
         e.preventDefault();
         cloneSelectedToClipboard();
@@ -745,6 +869,7 @@ export default forwardRef<
         return;
       }
 
+      // undo / redo
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) redoInternal();
@@ -758,6 +883,7 @@ export default forwardRef<
         return;
       }
 
+      // delete
       if (e.key === "Delete" || e.key === "Backspace") {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -789,13 +915,15 @@ export default forwardRef<
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
+    // history init
     pushHistoryNow(canvas);
 
+    // autoload items
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         isApplyingHistoryRef.current = true;
-        restoreFromJson(canvas, room, saved, () =>
+        restoreFromJson(canvas, room as any, saved, () =>
           onSelectionChangeRef.current?.(null)
         );
         isApplyingHistoryRef.current = false;
@@ -832,11 +960,13 @@ export default forwardRef<
       for (const l of gridLinesRef.current) canvas.remove(l);
       gridLinesRef.current = [];
 
+      for (const h of roomHandlesRef.current) canvas.remove(h);
+      roomHandlesRef.current = [];
+
       canvas.dispose();
 
       fabricCanvasRef.current = null;
       roomRef.current = null;
-
       scheduleRenderRef.current = null;
     };
   }, []);
@@ -849,7 +979,7 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        addFurniture(canvas, room, type);
+        addFurniture(canvas, room as any, type);
         restyleAllFurniture(canvas);
         pushHistoryNow(canvas);
       },
@@ -904,8 +1034,7 @@ export default forwardRef<
             hoverCursor: "move",
           });
 
-          if (active.rx && active.ry)
-            rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
 
           rect.scaleX = active.scaleX ?? 1;
           rect.scaleY = active.scaleY ?? 1;
@@ -920,8 +1049,8 @@ export default forwardRef<
 
           canvas.add(rect);
 
-          clampFurnitureInsideRoom(rect as any, room);
-          snapFurnitureToRoomGrid(rect as any, room, grid);
+          clampFurnitureInsideRoom(rect as any, room as any);
+          snapFurnitureToRoomGrid(rect as any, room as any, grid);
 
           rect.setCoords();
           clones.push(rect);
@@ -933,8 +1062,7 @@ export default forwardRef<
         } else {
           const anyCanvas: any = canvas as any;
           const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection ||
-            (window as any)?.fabric?.ActiveSelection;
+            anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
           if (ActiveSelectionCtor) {
             const sel = new ActiveSelectionCtor(clones, { canvas });
             canvas.setActiveObject(sel);
@@ -957,8 +1085,7 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         const active = canvas.getActiveObject() as any;
-        if (!active || !isFurniture(active) || Array.isArray(active?._objects))
-          return;
+        if (!active || !isFurniture(active) || Array.isArray(active?._objects)) return;
 
         if (typeof patch.width === "number" && patch.width > 1) {
           const current = active.getBoundingRect(false, true).width;
@@ -975,10 +1102,9 @@ export default forwardRef<
         if (typeof patch.angle === "number") active.angle = patch.angle;
 
         active.setCoords();
-        room.setCoords();
 
-        clampFurnitureInsideRoom(active, room);
-        snapFurnitureToRoomGrid(active, room, gridSizeRef.current);
+        clampFurnitureInsideRoom(active, room as any);
+        snapFurnitureToRoomGrid(active, room as any, gridSizeRef.current);
 
         active.setCoords();
         restyleAllFurniture(canvas);
@@ -1009,8 +1135,11 @@ export default forwardRef<
 
       save() {
         const canvas = fabricCanvasRef.current;
-        if (!canvas) return;
-        saveNow(canvas);
+        const room = roomRef.current;
+        if (!canvas || !room) return;
+        // NOTE: your saveNow must accept (canvas, room) OR keep old and rely on autosave.
+        // If your current saveNow(canvas) signature is old, update it as we discussed.
+        saveNow(canvas as any, room as any);
       },
 
       load() {
@@ -1018,22 +1147,35 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        const json = loadNow(canvas, room, () =>
+        const res = loadNow(canvas as any, room as any, () =>
           onSelectionChangeRef.current?.(null)
         );
-        if (json) {
-          restyleAllFurniture(canvas);
-          historyRef.current = [json];
+
+        // if loadNow returns string in your old version, adapt it. New version returns object.
+        const layoutJson =
+          typeof (res as any) === "string" ? (res as any) : (res as any)?.layoutJson;
+
+        // room points may be applied inside persistence OR are in localStorage (already loaded)
+        // After load, sync handles with current room
+        syncHandlesToRoom(roomHandlesRef.current, room);
+
+        rebuildGrid();
+        restyleAllFurniture(canvas);
+
+        if (layoutJson) {
+          historyRef.current = [layoutJson];
           historyIndexRef.current = 0;
-          scheduleAutosave();
-          safeRender();
         }
+
+        scheduleAutosave();
+        safeRender();
       },
 
       exportJson() {
         const canvas = fabricCanvasRef.current;
-        if (!canvas) return;
-        exportJsonFile(canvas);
+        const room = roomRef.current;
+        if (!canvas || !room) return;
+        exportJsonFile(canvas as any, room as any);
       },
 
       importJsonString(json: string) {
@@ -1041,10 +1183,14 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        importJson(canvas, room, json, () =>
+        importJson(canvas as any, room as any, json, () =>
           onSelectionChangeRef.current?.(null)
         );
 
+        // If room points were included in import, room is already updated.
+        syncHandlesToRoom(roomHandlesRef.current, room);
+
+        rebuildGrid();
         restyleAllFurniture(canvas);
 
         const stored = localStorage.getItem(STORAGE_KEY) ?? json;
@@ -1061,6 +1207,15 @@ export default forwardRef<
 
       setGridSize(size: number) {
         setGridSizeInternal(size);
+      },
+
+      // Room size by bbox
+      getRoomSize() {
+        return getRoomSizeInternal();
+      },
+
+      setRoomSize(size: RoomSize) {
+        setRoomSizeInternal(size);
       },
     }),
     []
