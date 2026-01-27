@@ -1,3 +1,4 @@
+// src/components/canvas/planner-canvas/planner-canvas.tsx
 "use client";
 
 import React, {
@@ -6,7 +7,7 @@ import React, {
   useImperativeHandle,
   useRef,
 } from "react";
-import { Canvas, Rect, Line, Polygon, Circle } from "fabric";
+import { Canvas, Rect, Polygon, Circle } from "fabric";
 
 import {
   GRID_SIZE,
@@ -62,46 +63,10 @@ import {
 import { attachKeyboardController } from "./keyboard-controller";
 import { attachMouseController } from "./mouse-controller";
 import { createSelectionController } from "./selection-controller";
-
-/** Grid (AABB) helper */
-function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
-  const lines: Line[] = [];
-
-  const roomRect = room.getBoundingRect();
-  const stroke = room.strokeWidth ?? 0;
-  const inset = stroke / 2;
-
-  const left = roomRect.left + inset;
-  const top = roomRect.top + inset;
-  const right = roomRect.left + roomRect.width - inset;
-  const bottom = roomRect.top + roomRect.height - inset;
-
-  for (let x = left; x <= right; x += gridSize) {
-    const l = new Line([x, top, x, bottom], {
-      stroke: "#d1d5db",
-      selectable: false,
-      evented: false,
-      excludeFromExport: true,
-    });
-    canvas.add(l);
-    lines.push(l);
-  }
-
-  for (let y = top; y <= bottom; y += gridSize) {
-    const l = new Line([left, y, right, y], {
-      stroke: "#d1d5db",
-      selectable: false,
-      evented: false,
-      excludeFromExport: true,
-    });
-    canvas.add(l);
-    lines.push(l);
-  }
-
-  return lines;
-}
+import { createGridController } from "./grid-controller";
 
 type SelectionController = ReturnType<typeof createSelectionController>;
+type GridController = ReturnType<typeof createGridController>;
 
 export default forwardRef<
   PlannerCanvasHandle,
@@ -133,11 +98,6 @@ export default forwardRef<
   // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
-  // grid
-  const gridVisibleRef = useRef(true);
-  const gridSizeRef = useRef<number>(GRID_SIZE);
-  const gridLinesRef = useRef<Line[]>([]);
-
   // clipboard
   const clipboardRef = useRef<any[] | null>(null);
 
@@ -145,8 +105,9 @@ export default forwardRef<
   const nudgeTimerRef = useRef<number | null>(null);
   const nudgeDirtyRef = useRef(false);
 
-  // selection controller (used by internal funcs + imperative API)
+  // controllers
   const selectionRef = useRef<SelectionController | null>(null);
+  const gridRef = useRef<GridController | null>(null);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -154,6 +115,8 @@ export default forwardRef<
     if (scheduleRenderRef.current) scheduleRenderRef.current();
     else canvas.requestRenderAll();
   };
+
+  const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
 
   const scheduleAutosave = () => {
     if (autosaveTimerRef.current) {
@@ -181,49 +144,6 @@ export default forwardRef<
     const snap = serializeState(canvas);
     pushHistory(historyRef, historyIndexRef, snap);
     scheduleAutosave();
-  };
-
-  const restackFixedBackground = () => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-
-    // room below furniture
-    canvas.sendObjectToBack(room);
-
-    // grid below room
-    for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
-
-    // handles above everything
-    for (const h of roomHandlesRef.current) canvas.bringObjectToFront(h);
-  };
-
-  const rebuildGrid = () => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-
-    for (const l of gridLinesRef.current) canvas.remove(l);
-    gridLinesRef.current = [];
-
-    if (gridVisibleRef.current) {
-      gridLinesRef.current = drawGridLines(canvas, room, gridSizeRef.current);
-    }
-
-    restackFixedBackground();
-    safeRender();
-  };
-
-  const setGridVisibleInternal = (visible: boolean) => {
-    gridVisibleRef.current = visible;
-    rebuildGrid();
-  };
-
-  const setGridSizeInternal = (size: number) => {
-    const next = Number(size);
-    if (!Number.isFinite(next) || next <= 5) return;
-    gridSizeRef.current = next;
-    rebuildGrid();
   };
 
   const undoInternal = () => {
@@ -319,7 +239,7 @@ export default forwardRef<
     const snaps = clipboardRef.current;
     if (!snaps || snaps.length === 0) return;
 
-    const grid = gridSizeRef.current ?? GRID_SIZE;
+    const grid = getGridSize();
     const clones: Rect[] = [];
 
     for (const snap of snaps) {
@@ -457,7 +377,8 @@ export default forwardRef<
       }
     }
 
-    restackFixedBackground();
+    // ensure room/grid/handles correct
+    gridRef.current?.restack();
 
     selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
@@ -521,7 +442,7 @@ export default forwardRef<
     setRoomPoints(room, pts);
     syncHandlesToRoom(roomHandlesRef.current, room);
 
-    rebuildGrid();
+    gridRef.current?.rebuild();
     updateOpeningsForRoomChange(canvas, room as any);
 
     canvas.getObjects().forEach((o: any) => {
@@ -565,8 +486,7 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) =>
-                p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
@@ -579,6 +499,16 @@ export default forwardRef<
 
     const handles = createCornerHandles(canvas, room);
     roomHandlesRef.current = handles;
+
+    // ✅ Grid controller (extracted)
+    const grid = createGridController({
+      canvas,
+      roomRef,
+      roomHandlesRef,
+      scheduleRender,
+      initial: { visible: true, size: GRID_SIZE },
+    });
+    gridRef.current = grid;
 
     // ✅ Selection + hover controller (extracted)
     const selection = createSelectionController({
@@ -594,9 +524,9 @@ export default forwardRef<
       canvas,
       room,
       handles,
-      gridSize: gridSizeRef.current,
+      gridSize: getGridSize(),
       onRoomChanging: () => {
-        rebuildGrid();
+        grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
         canvas.getObjects().forEach((o: any) => {
@@ -611,23 +541,19 @@ export default forwardRef<
       },
       onRoomChanged: () => {
         fitRoomToView(canvas, room);
-        rebuildGrid();
+        grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
         pushHistoryNow(canvas);
 
-        // persist points
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
         } catch {}
       },
     });
 
-    rebuildGrid();
+    grid.rebuild();
 
     const resizeCanvasToContainer = () => {
       const el = containerRef.current;
@@ -636,14 +562,14 @@ export default forwardRef<
       canvas.setDimensions({ width: el.clientWidth, height: el.clientHeight });
       canvas.calcOffset();
       fitRoomToView(canvas, room);
-      rebuildGrid();
+      grid.rebuild();
       scheduleRender();
     };
 
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    // ✅ Mouse controller (zoom + pan extracted)
+    // ✅ Mouse controller
     const detachMouse = attachMouseController({
       canvas,
       isSpacePressedRef,
@@ -666,11 +592,11 @@ export default forwardRef<
         return;
       }
 
-      const grid = gridSizeRef.current ?? GRID_SIZE;
+      const gridSize = getGridSize();
 
       const rect = obj.getBoundingRect(false, true);
-      const targetW = Math.max(grid, snapToGrid(rect.width, grid));
-      const targetH = Math.max(grid, snapToGrid(rect.height, grid));
+      const targetW = Math.max(gridSize, snapToGrid(rect.width, gridSize));
+      const targetH = Math.max(gridSize, snapToGrid(rect.height, gridSize));
 
       const baseW = Math.max(1, obj.width ?? 1);
       const baseH = Math.max(1, obj.height ?? 1);
@@ -744,9 +670,9 @@ export default forwardRef<
 
       if (!isFurniture(obj)) return;
 
-      const grid = gridSizeRef.current;
+      const gridSize = getGridSize();
 
-      snapFurnitureToRoomGrid(obj, room as any, grid);
+      snapFurnitureToRoomGrid(obj, room as any, gridSize);
 
       clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
@@ -760,13 +686,13 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // ✅ Keyboard controller (extracted)
+    // ✅ Keyboard controller
     const detachKeyboard = attachKeyboardController({
       canvas,
       isSpacePressedRef,
       isShiftPressedRef,
       isAltPressedRef,
-      getGridSize: () => gridSizeRef.current ?? GRID_SIZE,
+      getGridSize: () => getGridSize(),
       actions: {
         moveLayer,
         nudgeSelected,
@@ -809,9 +735,11 @@ export default forwardRef<
       detachMouse();
       detachKeyboard();
 
-      // selection controller cleanup
       selection.detach();
       selectionRef.current = null;
+
+      grid.dispose();
+      gridRef.current = null;
 
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
@@ -824,9 +752,6 @@ export default forwardRef<
       }
 
       clearGuides(canvas, guidesRef);
-
-      for (const l of gridLinesRef.current) canvas.remove(l);
-      gridLinesRef.current = [];
 
       for (const h of roomHandlesRef.current) canvas.remove(h);
       roomHandlesRef.current = [];
@@ -865,7 +790,7 @@ export default forwardRef<
         const selected = getSelectedFurnitureObjects();
         if (selected.length === 0) return;
 
-        const grid = gridSizeRef.current ?? GRID_SIZE;
+        const grid = getGridSize();
         const clones: Rect[] = [];
 
         for (const active of selected) {
@@ -960,13 +885,12 @@ export default forwardRef<
 
         clampFurnitureInsideRoomPolygon(active, room as any);
         clampFurnitureInsideRoom(active, room as any);
-        snapFurnitureToRoomGrid(active, room as any, gridSizeRef.current);
+        snapFurnitureToRoomGrid(active, room as any, getGridSize());
 
         active.setCoords();
         selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
 
-        // keep panel in sync
         onSelectionChangeRef.current?.(getSelectedInfo(active));
         pushHistoryNow(canvas);
         safeRender();
@@ -1006,10 +930,9 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         );
 
-        // after room points applied, move handles to corners
         syncHandlesToRoom(roomHandlesRef.current, room);
 
-        rebuildGrid();
+        gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
@@ -1040,7 +963,7 @@ export default forwardRef<
 
         syncHandlesToRoom(roomHandlesRef.current, room);
 
-        rebuildGrid();
+        gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
@@ -1053,14 +976,13 @@ export default forwardRef<
       },
 
       setGridVisible(visible: boolean) {
-        setGridVisibleInternal(visible);
+        gridRef.current?.setVisible(visible);
       },
 
       setGridSize(size: number) {
-        setGridSizeInternal(size);
+        gridRef.current?.setSize(size);
       },
 
-      // Room size by bbox
       getRoomSize() {
         return getRoomSizeInternal();
       },
