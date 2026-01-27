@@ -1,4 +1,3 @@
-// src/components/canvas/planner-canvas/planner-canvas.tsx
 "use client";
 
 import React, {
@@ -35,7 +34,7 @@ import {
 } from "./furniture";
 import { fitRoomToView } from "./fit";
 import { alignAndGuide, clearGuides } from "./guides";
-import { serializeState, restoreFromJson, pushHistory } from "./history";
+import { serializeState, restoreFromJson } from "./history";
 import {
   saveNow,
   loadNow,
@@ -64,9 +63,11 @@ import { attachKeyboardController } from "./keyboard-controller";
 import { attachMouseController } from "./mouse-controller";
 import { createSelectionController } from "./selection-controller";
 import { createGridController } from "./grid-controller";
+import { createHistoryController } from "./history-controller";
 
 type SelectionController = ReturnType<typeof createSelectionController>;
 type GridController = ReturnType<typeof createGridController>;
+type HistoryController = ReturnType<typeof createHistoryController>;
 
 export default forwardRef<
   PlannerCanvasHandle,
@@ -89,17 +90,7 @@ export default forwardRef<
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
 
-  const historyRef = useRef<string[]>([]);
-  const historyIndexRef = useRef<number>(-1);
   const guidesRef = useRef<GuideLine[]>([]);
-  const autosaveTimerRef = useRef<number | null>(null);
-  const isApplyingHistoryRef = useRef(false);
-
-  // render
-  const scheduleRenderRef = useRef<null | (() => void)>(null);
-
-  // clipboard
-  const clipboardRef = useRef<any[] | null>(null);
 
   // nudge batching
   const nudgeTimerRef = useRef<number | null>(null);
@@ -108,6 +99,13 @@ export default forwardRef<
   // controllers
   const selectionRef = useRef<SelectionController | null>(null);
   const gridRef = useRef<GridController | null>(null);
+  const historyRef = useRef<HistoryController | null>(null);
+
+  // render
+  const scheduleRenderRef = useRef<null | (() => void)>(null);
+
+  // clipboard
+  const clipboardRef = useRef<any[] | null>(null);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -118,80 +116,6 @@ export default forwardRef<
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
 
-  const scheduleAutosave = () => {
-    if (autosaveTimerRef.current) {
-      window.clearTimeout(autosaveTimerRef.current);
-      autosaveTimerRef.current = null;
-    }
-
-    autosaveTimerRef.current = window.setTimeout(() => {
-      const canvas = fabricCanvasRef.current;
-      const room = roomRef.current;
-      if (!canvas || !room) return;
-
-      try {
-        const json = serializeState(canvas);
-        localStorage.setItem(STORAGE_KEY, json);
-
-        const pts = getRoomPoints(room);
-        localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
-      } catch {}
-    }, 350);
-  };
-
-  const pushHistoryNow = (canvas: Canvas) => {
-    if (isApplyingHistoryRef.current) return;
-    const snap = serializeState(canvas);
-    pushHistory(historyRef, historyIndexRef, snap);
-    scheduleAutosave();
-  };
-
-  const undoInternal = () => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-    if (historyIndexRef.current <= 0) return;
-
-    historyIndexRef.current -= 1;
-
-    isApplyingHistoryRef.current = true;
-    restoreFromJson(
-      canvas,
-      room as any,
-      historyRef.current[historyIndexRef.current],
-      () => onSelectionChangeRef.current?.(null)
-    );
-    isApplyingHistoryRef.current = false;
-
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-    scheduleAutosave();
-    safeRender();
-  };
-
-  const redoInternal = () => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-    if (historyIndexRef.current >= historyRef.current.length - 1) return;
-
-    historyIndexRef.current += 1;
-
-    isApplyingHistoryRef.current = true;
-    restoreFromJson(
-      canvas,
-      room as any,
-      historyRef.current[historyIndexRef.current],
-      () => onSelectionChangeRef.current?.(null)
-    );
-    isApplyingHistoryRef.current = false;
-
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-    scheduleAutosave();
-    safeRender();
-  };
-
   const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
   const getSelectedFurnitureObjects = (): any[] => {
@@ -200,6 +124,18 @@ export default forwardRef<
 
   const emitSelection = () => {
     selectionRef.current?.emitSelection();
+  };
+
+  const pushHistoryNow = () => {
+    historyRef.current?.pushNow();
+  };
+
+  const undoInternal = () => {
+    historyRef.current?.undo();
+  };
+
+  const redoInternal = () => {
+    historyRef.current?.redo();
   };
 
   const cloneSelectedToClipboard = () => {
@@ -305,7 +241,7 @@ export default forwardRef<
     selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
 
-    pushHistoryNow(canvas);
+    pushHistoryNow();
     safeRender();
   };
 
@@ -315,12 +251,10 @@ export default forwardRef<
     if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
 
     nudgeTimerRef.current = window.setTimeout(() => {
-      const canvas = fabricCanvasRef.current;
-      if (!canvas) return;
       if (!nudgeDirtyRef.current) return;
 
       nudgeDirtyRef.current = false;
-      pushHistoryNow(canvas);
+      pushHistoryNow();
     }, 220);
   };
 
@@ -384,7 +318,7 @@ export default forwardRef<
     clearGuides(canvas, guidesRef);
     safeRender();
 
-    pushHistoryNow(canvas);
+    pushHistoryNow();
   };
 
   const deleteSelectedInternal = () => {
@@ -402,7 +336,7 @@ export default forwardRef<
     selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
 
-    pushHistoryNow(canvas);
+    pushHistoryNow();
     safeRender();
   };
 
@@ -457,7 +391,7 @@ export default forwardRef<
     safeRender();
 
     localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
-    pushHistoryNow(canvas);
+    pushHistoryNow();
   };
 
   useEffect(() => {
@@ -500,7 +434,7 @@ export default forwardRef<
     const handles = createCornerHandles(canvas, room);
     roomHandlesRef.current = handles;
 
-    // ✅ Grid controller (extracted)
+    // ✅ Grid controller
     const grid = createGridController({
       canvas,
       roomRef,
@@ -510,7 +444,7 @@ export default forwardRef<
     });
     gridRef.current = grid;
 
-    // ✅ Selection + hover controller (extracted)
+    // ✅ Selection + hover controller
     const selection = createSelectionController({
       canvas,
       onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
@@ -519,6 +453,32 @@ export default forwardRef<
     });
     selection.attach();
     selectionRef.current = selection;
+
+    // ✅ History controller
+    const history = createHistoryController({
+      canvas,
+      storageKey: STORAGE_KEY,
+      scheduleRender,
+      serialize: () => serializeState(canvas),
+      restore: (json) =>
+        restoreFromJson(canvas, room as any, json, () =>
+          onSelectionChangeRef.current?.(null)
+        ),
+      onAfterRestore: () => {
+        // keep stack order + UI consistent after restore
+        gridRef.current?.restack();
+        selectionRef.current?.restyleAllFurniture();
+        clearGuides(canvas, guidesRef);
+      },
+      autosaveExtra: () => {
+        // keep room points saved together with item autosave
+        try {
+          const pts = getRoomPoints(room);
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+        } catch {}
+      },
+    });
+    historyRef.current = history;
 
     attachWallEditing({
       canvas,
@@ -544,7 +504,7 @@ export default forwardRef<
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
-        pushHistoryNow(canvas);
+        pushHistoryNow();
 
         try {
           const pts = getRoomPoints(room);
@@ -663,7 +623,7 @@ export default forwardRef<
         snapOpeningToNearestWall(obj, room as any);
         obj.setCoords();
         emitSelection();
-        pushHistoryNow(canvas);
+        pushHistoryNow();
         scheduleRender();
         return;
       }
@@ -682,7 +642,7 @@ export default forwardRef<
       selectionRef.current?.restyleAllFurniture();
       clearGuides(canvas, guidesRef);
 
-      pushHistoryNow(canvas);
+      pushHistoryNow();
       scheduleRender();
     });
 
@@ -704,28 +664,8 @@ export default forwardRef<
       },
     });
 
-    // history init
-    pushHistoryNow(canvas);
-
-    // autoload items
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        isApplyingHistoryRef.current = true;
-        restoreFromJson(canvas, room as any, saved, () =>
-          onSelectionChangeRef.current?.(null)
-        );
-        isApplyingHistoryRef.current = false;
-
-        selectionRef.current?.restyleAllFurniture();
-        historyRef.current = [saved];
-        historyIndexRef.current = 0;
-      } catch {
-        isApplyingHistoryRef.current = false;
-      }
-    } else {
-      selectionRef.current?.restyleAllFurniture();
-    }
+    // ✅ history init (autoload if exists)
+    history.initFromStorage();
 
     scheduleRender();
 
@@ -741,10 +681,8 @@ export default forwardRef<
       grid.dispose();
       gridRef.current = null;
 
-      if (autosaveTimerRef.current) {
-        window.clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
-      }
+      history.dispose();
+      historyRef.current = null;
 
       if (nudgeTimerRef.current) {
         window.clearTimeout(nudgeTimerRef.current);
@@ -775,7 +713,7 @@ export default forwardRef<
         addFurniture(canvas, room as any, type);
 
         selectionRef.current?.restyleAllFurniture();
-        pushHistoryNow(canvas);
+        pushHistoryNow();
       },
 
       deleteSelected() {
@@ -854,7 +792,7 @@ export default forwardRef<
         selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
 
-        pushHistoryNow(canvas);
+        pushHistoryNow();
         safeRender();
       },
 
@@ -892,7 +830,7 @@ export default forwardRef<
         clearGuides(canvas, guidesRef);
 
         onSelectionChangeRef.current?.(getSelectedInfo(active));
-        pushHistoryNow(canvas);
+        pushHistoryNow();
         safeRender();
       },
 
@@ -936,11 +874,9 @@ export default forwardRef<
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
-        if (layoutJson) {
-          historyRef.current = [layoutJson];
-          historyIndexRef.current = 0;
-          scheduleAutosave();
-        }
+        // reset undo stack to loaded snapshot
+        const snap = layoutJson ?? serializeState(canvas);
+        historyRef.current?.setHistoryFromSnapshot(snap);
 
         safeRender();
       },
@@ -967,11 +903,11 @@ export default forwardRef<
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
-        const stored = localStorage.getItem(STORAGE_KEY) ?? null;
-        historyRef.current = [stored ?? serializeState(canvas)];
-        historyIndexRef.current = 0;
+        // reset undo stack to imported snapshot
+        const snap = serializeState(canvas);
+        historyRef.current?.setHistoryFromSnapshot(snap);
 
-        pushHistoryNow(canvas);
+        pushHistoryNow();
         safeRender();
       },
 
