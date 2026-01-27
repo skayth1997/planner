@@ -13,10 +13,6 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_SENSITIVITY,
-  ACTIVE_STROKE,
-  ACTIVE_STROKE_WIDTH,
-  HOVER_STROKE,
-  HOVER_STROKE_WIDTH,
   STORAGE_KEY,
   STORAGE_ROOM_KEY,
 } from "./planner-constants";
@@ -65,6 +61,7 @@ import {
 
 import { attachKeyboardController } from "./keyboard-controller";
 import { attachMouseController } from "./mouse-controller";
+import { createSelectionController } from "./selection-controller";
 
 /** Grid (AABB) helper */
 function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
@@ -103,6 +100,8 @@ function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
 
   return lines;
 }
+
+type SelectionController = ReturnType<typeof createSelectionController>;
 
 export default forwardRef<
   PlannerCanvasHandle,
@@ -146,6 +145,9 @@ export default forwardRef<
   const nudgeTimerRef = useRef<number | null>(null);
   const nudgeDirtyRef = useRef(false);
 
+  // selection controller (used by internal funcs + imperative API)
+  const selectionRef = useRef<SelectionController | null>(null);
+
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -174,27 +176,6 @@ export default forwardRef<
     }, 350);
   };
 
-  const restyleAllFurniture = (canvas: Canvas) => {
-    const active = canvas.getActiveObject() as any;
-
-    canvas.getObjects().forEach((o: any) => {
-      if (!isFurniture(o)) return;
-
-      const baseStroke = o.data?.baseStroke ?? "#10b981";
-      const baseStrokeWidth = o.data?.baseStrokeWidth ?? 2;
-
-      if (active && o === active) {
-        o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
-      } else {
-        o.set({ stroke: baseStroke, strokeWidth: baseStrokeWidth });
-      }
-
-      o.setCoords();
-    });
-
-    safeRender();
-  };
-
   const pushHistoryNow = (canvas: Canvas) => {
     if (isApplyingHistoryRef.current) return;
     const snap = serializeState(canvas);
@@ -207,8 +188,13 @@ export default forwardRef<
     const room = roomRef.current;
     if (!canvas || !room) return;
 
+    // room below furniture
     canvas.sendObjectToBack(room);
+
+    // grid below room
     for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
+
+    // handles above everything
     for (const h of roomHandlesRef.current) canvas.bringObjectToFront(h);
   };
 
@@ -257,7 +243,7 @@ export default forwardRef<
     );
     isApplyingHistoryRef.current = false;
 
-    restyleAllFurniture(canvas);
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
     scheduleAutosave();
     safeRender();
@@ -280,7 +266,7 @@ export default forwardRef<
     );
     isApplyingHistoryRef.current = false;
 
-    restyleAllFurniture(canvas);
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
     scheduleAutosave();
     safeRender();
@@ -288,35 +274,19 @@ export default forwardRef<
 
   const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
-  const getSelectedFurnitureObjects = (canvas: Canvas): any[] => {
-    const active: any = canvas.getActiveObject();
-    if (!active) return [];
-
-    const objs: any[] = Array.isArray(active?._objects)
-      ? active._objects
-      : [active];
-    return objs.filter((o) => isFurniture(o));
+  const getSelectedFurnitureObjects = (): any[] => {
+    return selectionRef.current?.getSelectedFurnitureObjects() ?? [];
   };
 
   const emitSelection = () => {
-    const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    const selected = getSelectedFurnitureObjects(canvas);
-
-    if (selected.length === 0) {
-      onSelectionChangeRef.current?.(null);
-      return;
-    }
-
-    onSelectionChangeRef.current?.(getSelectedInfo(selected[0]));
+    selectionRef.current?.emitSelection();
   };
 
   const cloneSelectedToClipboard = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
 
-    const selected = getSelectedFurnitureObjects(canvas);
+    const selected = getSelectedFurnitureObjects();
     if (selected.length === 0) return;
 
     clipboardRef.current = selected.map((active: any) => ({
@@ -412,7 +382,7 @@ export default forwardRef<
     }
 
     emitSelection();
-    restyleAllFurniture(canvas);
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
 
     pushHistoryNow(canvas);
@@ -439,7 +409,7 @@ export default forwardRef<
     const room = roomRef.current;
     if (!canvas || !room) return;
 
-    const selected = getSelectedFurnitureObjects(canvas);
+    const selected = getSelectedFurnitureObjects();
     if (selected.length === 0) return;
 
     for (const o of selected) {
@@ -461,7 +431,7 @@ export default forwardRef<
     }
 
     emitSelection();
-    restyleAllFurniture(canvas);
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
     safeRender();
 
@@ -472,7 +442,7 @@ export default forwardRef<
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
 
-    const selected = getSelectedFurnitureObjects(canvas);
+    const selected = getSelectedFurnitureObjects();
     if (selected.length === 0) return;
 
     const objs = dir === "up" ? [...selected] : [...selected].reverse();
@@ -489,7 +459,7 @@ export default forwardRef<
 
     restackFixedBackground();
 
-    restyleAllFurniture(canvas);
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
     safeRender();
 
@@ -500,14 +470,15 @@ export default forwardRef<
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
 
-    const selected = getSelectedFurnitureObjects(canvas);
+    const selected = getSelectedFurnitureObjects();
     if (selected.length === 0) return;
 
     for (const o of selected) canvas.remove(o);
 
     canvas.discardActiveObject();
     onSelectionChangeRef.current?.(null);
-    restyleAllFurniture(canvas);
+
+    selectionRef.current?.restyleAllFurniture();
     clearGuides(canvas, guidesRef);
 
     pushHistoryNow(canvas);
@@ -582,10 +553,11 @@ export default forwardRef<
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
 
-    // room + handles
+    // === Create room polygon + handles ===
     const room = createRoomPolygon(canvas);
     roomRef.current = room;
 
+    // Load saved room points (if any)
     const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
     if (savedRoom) {
       try {
@@ -593,17 +565,30 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) =>
+                p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
-          if (pts.length >= 3) setRoomPoints(room, pts);
+          if (pts.length >= 3) {
+            setRoomPoints(room, pts);
+          }
         }
       } catch {}
     }
 
     const handles = createCornerHandles(canvas, room);
     roomHandlesRef.current = handles;
+
+    // ✅ Selection + hover controller (extracted)
+    const selection = createSelectionController({
+      canvas,
+      onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
+      scheduleRender,
+      clearGuides: () => clearGuides(canvas, guidesRef),
+    });
+    selection.attach();
+    selectionRef.current = selection;
 
     attachWallEditing({
       canvas,
@@ -631,9 +616,13 @@ export default forwardRef<
 
         pushHistoryNow(canvas);
 
+        // persist points
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -654,64 +643,13 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    // ✅ Mouse controller (extracted zoom + pan)
+    // ✅ Mouse controller (zoom + pan extracted)
     const detachMouse = attachMouseController({
       canvas,
       isSpacePressedRef,
       zoom: { min: ZOOM_MIN, max: ZOOM_MAX, sensitivity: ZOOM_SENSITIVITY },
       scheduleRender,
-      onPanEnd: () => {
-        clearGuides(canvas, guidesRef);
-      },
-    });
-
-    // selection events
-    canvas.on("selection:created", () => {
-      emitSelection();
-      restyleAllFurniture(canvas);
-      clearGuides(canvas, guidesRef);
-      scheduleRender();
-    });
-
-    canvas.on("selection:updated", () => {
-      emitSelection();
-      restyleAllFurniture(canvas);
-      clearGuides(canvas, guidesRef);
-      scheduleRender();
-    });
-
-    canvas.on("selection:cleared", () => {
-      onSelectionChangeRef.current?.(null);
-      restyleAllFurniture(canvas);
-      clearGuides(canvas, guidesRef);
-      scheduleRender();
-    });
-
-    // hover
-    canvas.on("mouse:over", (opt) => {
-      const t = opt.target as any;
-      if (!t || !isFurniture(t)) return;
-
-      const active = canvas.getActiveObject() as any;
-      if (active && (active === t || Array.isArray(active?._objects))) return;
-
-      t.set({ stroke: HOVER_STROKE, strokeWidth: HOVER_STROKE_WIDTH });
-      t.setCoords();
-      scheduleRender();
-    });
-
-    canvas.on("mouse:out", (opt) => {
-      const t = opt.target as any;
-      if (!t || !isFurniture(t)) return;
-
-      const active = canvas.getActiveObject() as any;
-      if (active && (active === t || Array.isArray(active?._objects))) return;
-
-      const baseStroke = t.data?.baseStroke ?? "#10b981";
-      const baseStrokeWidth = t.data?.baseStrokeWidth ?? 2;
-      t.set({ stroke: baseStroke, strokeWidth: baseStrokeWidth });
-      t.setCoords();
-      scheduleRender();
+      onPanEnd: () => clearGuides(canvas, guidesRef),
     });
 
     // transforms
@@ -765,6 +703,7 @@ export default forwardRef<
       const obj = opt.target as any;
       if (!obj) return;
 
+      // openings snap to wall
       if (isOpening(obj)) {
         snapOpeningToNearestWall(obj, room as any);
         obj.setCoords();
@@ -814,14 +753,14 @@ export default forwardRef<
 
       obj.setCoords();
       emitSelection();
-      restyleAllFurniture(canvas);
+      selectionRef.current?.restyleAllFurniture();
       clearGuides(canvas, guidesRef);
 
       pushHistoryNow(canvas);
       scheduleRender();
     });
 
-    // ✅ Keyboard controller (already extracted)
+    // ✅ Keyboard controller (extracted)
     const detachKeyboard = attachKeyboardController({
       canvas,
       isSpacePressedRef,
@@ -842,7 +781,7 @@ export default forwardRef<
     // history init
     pushHistoryNow(canvas);
 
-    // autoload
+    // autoload items
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
@@ -852,14 +791,14 @@ export default forwardRef<
         );
         isApplyingHistoryRef.current = false;
 
-        restyleAllFurniture(canvas);
+        selectionRef.current?.restyleAllFurniture();
         historyRef.current = [saved];
         historyIndexRef.current = 0;
       } catch {
         isApplyingHistoryRef.current = false;
       }
     } else {
-      restyleAllFurniture(canvas);
+      selectionRef.current?.restyleAllFurniture();
     }
 
     scheduleRender();
@@ -869,6 +808,10 @@ export default forwardRef<
 
       detachMouse();
       detachKeyboard();
+
+      // selection controller cleanup
+      selection.detach();
+      selectionRef.current = null;
 
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
@@ -905,7 +848,8 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         addFurniture(canvas, room as any, type);
-        restyleAllFurniture(canvas);
+
+        selectionRef.current?.restyleAllFurniture();
         pushHistoryNow(canvas);
       },
 
@@ -918,7 +862,7 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        const selected = getSelectedFurnitureObjects(canvas);
+        const selected = getSelectedFurnitureObjects();
         if (selected.length === 0) return;
 
         const grid = gridSizeRef.current ?? GRID_SIZE;
@@ -982,7 +926,7 @@ export default forwardRef<
         }
 
         emitSelection();
-        restyleAllFurniture(canvas);
+        selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
 
         pushHistoryNow(canvas);
@@ -1019,9 +963,10 @@ export default forwardRef<
         snapFurnitureToRoomGrid(active, room as any, gridSizeRef.current);
 
         active.setCoords();
-        restyleAllFurniture(canvas);
+        selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
 
+        // keep panel in sync
         onSelectionChangeRef.current?.(getSelectedInfo(active));
         pushHistoryNow(canvas);
         safeRender();
@@ -1061,11 +1006,12 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         );
 
+        // after room points applied, move handles to corners
         syncHandlesToRoom(roomHandlesRef.current, room);
 
         rebuildGrid();
         updateOpeningsForRoomChange(canvas, room as any);
-        restyleAllFurniture(canvas);
+        selectionRef.current?.restyleAllFurniture();
 
         if (layoutJson) {
           historyRef.current = [layoutJson];
@@ -1096,7 +1042,7 @@ export default forwardRef<
 
         rebuildGrid();
         updateOpeningsForRoomChange(canvas, room as any);
-        restyleAllFurniture(canvas);
+        selectionRef.current?.restyleAllFurniture();
 
         const stored = localStorage.getItem(STORAGE_KEY) ?? null;
         historyRef.current = [stored ?? serializeState(canvas)];
@@ -1114,6 +1060,7 @@ export default forwardRef<
         setGridSizeInternal(size);
       },
 
+      // Room size by bbox
       getRoomSize() {
         return getRoomSizeInternal();
       },
