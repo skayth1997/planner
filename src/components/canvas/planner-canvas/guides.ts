@@ -4,69 +4,77 @@ import type { GuideLine } from "./planner-types";
 import { isFurniture } from "./utils";
 import { ALIGN_SNAP_TOLERANCE } from "./planner-constants";
 
-export function clearGuides(canvas: Canvas, guidesRef: { current: GuideLine[] }) {
-  if (!guidesRef.current.length) return;
-  for (const g of guidesRef.current) canvas.remove(g);
-  guidesRef.current = [];
+type GuidePair = {
+  v: GuideLine;
+  h: GuideLine;
+  initialized: boolean;
+};
+
+function ensureGuidePair(canvas: Canvas, guidesRef: { current: GuideLine[] }) {
+  // We store 2 lines in guidesRef.current: [v, h]
+  if (guidesRef.current.length === 2) {
+    return {
+      v: guidesRef.current[0],
+      h: guidesRef.current[1],
+      initialized: true,
+    } as GuidePair;
+  }
+
+  // Create once
+  const v = new Line([0, 0, 0, 0], {
+    stroke: "#2563eb",
+    strokeWidth: 2,
+    selectable: false,
+    evented: false,
+    excludeFromExport: true,
+    opacity: 0.9,
+    visible: false,
+  });
+
+  const h = new Line([0, 0, 0, 0], {
+    stroke: "#2563eb",
+    strokeWidth: 2,
+    selectable: false,
+    evented: false,
+    excludeFromExport: true,
+    opacity: 0.9,
+    visible: false,
+  });
+
+  canvas.add(v);
+  canvas.add(h);
+
+  // Keep them on top
+  canvas.bringObjectToFront(v);
+  canvas.bringObjectToFront(h);
+
+  guidesRef.current = [v, h];
+
+  return { v, h, initialized: true } as GuidePair;
+}
+
+export function clearGuides(
+  canvas: Canvas,
+  guidesRef: { current: GuideLine[] }
+) {
+  // Instead of removing objects, just hide them
+  if (guidesRef.current.length !== 2) return;
+  const [v, h] = guidesRef.current;
+  v.set({ visible: false });
+  h.set({ visible: false });
   canvas.requestRenderAll();
 }
 
-export function addGuide(
-  canvas: Canvas,
-  guidesRef: { current: GuideLine[] },
-  line: GuideLine
-) {
-  canvas.add(line);
-  // Fabric v7: Canvas has bringObjectToFront (NOT bringToFront)
-  canvas.bringObjectToFront(line);
-  guidesRef.current.push(line);
+function updateV(line: GuideLine, x: number, y1: number, y2: number) {
+  line.set({ x1: x, y1, x2: x, y2, visible: true });
 }
 
-export function drawGuides(
-  canvas: Canvas,
-  room: Rect,
-  guidesRef: { current: GuideLine[] },
-  guides: Array<
-    | { kind: "v"; x: number; y1: number; y2: number }
-    | { kind: "h"; y: number; x1: number; x2: number }
-    >
-) {
-  clearGuides(canvas, guidesRef);
-  if (guides.length === 0) return;
+function updateH(line: GuideLine, y: number, x1: number, x2: number) {
+  line.set({ x1, y1: y, x2, y2: y, visible: true });
+}
 
-  for (const g of guides) {
-    if (g.kind === "v") {
-      addGuide(
-        canvas,
-        guidesRef,
-        new Line([g.x, g.y1, g.x, g.y2], {
-          stroke: "#2563eb",
-          strokeWidth: 2,
-          selectable: false,
-          evented: false,
-          excludeFromExport: true,
-          opacity: 0.9,
-        })
-      );
-    } else {
-      addGuide(
-        canvas,
-        guidesRef,
-        new Line([g.x1, g.y, g.x2, g.y], {
-          stroke: "#2563eb",
-          strokeWidth: 2,
-          selectable: false,
-          evented: false,
-          excludeFromExport: true,
-          opacity: 0.9,
-        })
-      );
-    }
-  }
-
-  canvas.getObjects().forEach((o: any) => {
-    if (!isFurniture(o)) return;
-  });
+function hide(line: GuideLine) {
+  line.set({ visible: false });
 }
 
 function computeObjectAABB(obj: any) {
@@ -97,6 +105,8 @@ export function alignAndGuide(
   guidesRef: { current: GuideLine[] },
   moving: any
 ) {
+  const { v, h } = ensureGuidePair(canvas, guidesRef);
+
   const all = canvas
     .getObjects()
     .filter((o: any) => isFurniture(o) && o !== moving);
@@ -114,10 +124,9 @@ export function alignAndGuide(
   let bestDxAbs = Number.POSITIVE_INFINITY;
   let bestDyAbs = Number.POSITIVE_INFINITY;
 
-  const guides: Array<
-    | { kind: "v"; x: number; y1: number; y2: number }
-    | { kind: "h"; y: number; x1: number; x2: number }
-    > = [];
+  // Best guide candidates
+  let bestV: null | { x: number; y1: number; y2: number } = null;
+  let bestH: null | { y: number; x1: number; x2: number } = null;
 
   const candidatesX = [mv.left, mv.cx, mv.right];
   const candidatesY = [mv.top, mv.cy, mv.bottom];
@@ -137,7 +146,7 @@ export function alignAndGuide(
 
           const y1 = Math.max(roomTop, Math.min(mv.top, ob.top));
           const y2 = Math.min(roomBottom, Math.max(mv.bottom, ob.bottom));
-          guides.push({ kind: "v", x: tX, y1, y2 });
+          bestV = { x: tX, y1, y2 };
         }
       }
     }
@@ -151,7 +160,7 @@ export function alignAndGuide(
 
           const x1 = Math.max(roomLeft, Math.min(mv.left, ob.left));
           const x2 = Math.min(roomRight, Math.max(mv.right, ob.right));
-          guides.push({ kind: "h", y: tY, x1, x2 });
+          bestH = { y: tY, x1, x2 };
         }
       }
     }
@@ -164,15 +173,14 @@ export function alignAndGuide(
     moving.set({ top: (moving.top ?? 0) + bestDy });
   }
 
-  const bestGuides: typeof guides = [];
-  for (let i = guides.length - 1; i >= 0; i--) {
-    const g = guides[i];
-    if (g.kind === "v" && !bestGuides.some((x) => x.kind === "v"))
-      bestGuides.push(g);
-    if (g.kind === "h" && !bestGuides.some((x) => x.kind === "h"))
-      bestGuides.push(g);
-    if (bestGuides.length === 2) break;
-  }
+  // Update persistent lines
+  if (bestV) updateV(v, bestV.x, bestV.y1, bestV.y2);
+  else hide(v);
 
-  drawGuides(canvas, room, guidesRef, bestGuides);
+  if (bestH) updateH(h, bestH.y, bestH.x1, bestH.x2);
+  else hide(h);
+
+  // Keep on top (in case new objects got added)
+  canvas.bringObjectToFront(v);
+  canvas.bringObjectToFront(h);
 }

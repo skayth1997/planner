@@ -44,9 +44,10 @@ import {
   importJsonString as importJson,
 } from "./persistence";
 
-// NEW: render throttling (1 render per animation frame)
+/** Render throttling: at most 1 render per animation frame */
 function createRenderScheduler(canvas: Canvas) {
   let raf: number | null = null;
+
   return function scheduleRender() {
     if (raf) return;
     raf = requestAnimationFrame(() => {
@@ -75,6 +76,18 @@ export default forwardRef<
   const autosaveTimerRef = useRef<number | null>(null);
   const isApplyingHistoryRef = useRef(false);
 
+  // NEW: refs so UI buttons can call undo/redo & schedule render
+  const scheduleRenderRef = useRef<null | (() => void)>(null);
+  const undoRef = useRef<null | (() => void)>(null);
+  const redoRef = useRef<null | (() => void)>(null);
+
+  const safeRender = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+    if (scheduleRenderRef.current) scheduleRenderRef.current();
+    else canvas.requestRenderAll();
+  };
+
   const scheduleAutosave = () => {
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current);
@@ -92,7 +105,7 @@ export default forwardRef<
     }, 350);
   };
 
-  const restyleAllFurniture = (canvas: Canvas, scheduleRender: () => void) => {
+  const restyleAllFurniture = (canvas: Canvas) => {
     const active = canvas.getActiveObject() as any;
 
     canvas.getObjects().forEach((o: any) => {
@@ -110,7 +123,7 @@ export default forwardRef<
       o.setCoords();
     });
 
-    scheduleRender();
+    safeRender();
   };
 
   const pushHistoryNow = (canvas: Canvas) => {
@@ -120,7 +133,7 @@ export default forwardRef<
     scheduleAutosave();
   };
 
-  const undo = (scheduleRender: () => void) => {
+  const undoInternal = () => {
     const canvas = fabricCanvasRef.current;
     const room = roomRef.current;
     if (!canvas || !room) return;
@@ -133,18 +146,17 @@ export default forwardRef<
       canvas,
       room,
       historyRef.current[historyIndexRef.current],
-      () => {
-        onSelectionChangeRef.current?.(null);
-      }
+      () => onSelectionChangeRef.current?.(null)
     );
     isApplyingHistoryRef.current = false;
 
-    restyleAllFurniture(canvas, scheduleRender);
+    restyleAllFurniture(canvas);
     clearGuides(canvas, guidesRef);
     scheduleAutosave();
+    safeRender();
   };
 
-  const redo = (scheduleRender: () => void) => {
+  const redoInternal = () => {
     const canvas = fabricCanvasRef.current;
     const room = roomRef.current;
     if (!canvas || !room) return;
@@ -157,15 +169,14 @@ export default forwardRef<
       canvas,
       room,
       historyRef.current[historyIndexRef.current],
-      () => {
-        onSelectionChangeRef.current?.(null);
-      }
+      () => onSelectionChangeRef.current?.(null)
     );
     isApplyingHistoryRef.current = false;
 
-    restyleAllFurniture(canvas, scheduleRender);
+    restyleAllFurniture(canvas);
     clearGuides(canvas, guidesRef);
     scheduleAutosave();
+    safeRender();
   };
 
   useEffect(() => {
@@ -177,9 +188,14 @@ export default forwardRef<
       preserveObjectStacking: true,
     });
 
-    const scheduleRender = createRenderScheduler(canvas);
-
     fabricCanvasRef.current = canvas;
+
+    const scheduleRender = createRenderScheduler(canvas);
+    scheduleRenderRef.current = scheduleRender;
+
+    // expose undo/redo via refs for UI buttons (imperative handle)
+    undoRef.current = undoInternal;
+    redoRef.current = redoInternal;
 
     const room = drawRoom(canvas);
     roomRef.current = room;
@@ -264,21 +280,21 @@ export default forwardRef<
 
     canvas.on("selection:created", () => {
       emitSelection();
-      restyleAllFurniture(canvas, scheduleRender);
+      restyleAllFurniture(canvas);
       clearGuides(canvas, guidesRef);
       scheduleRender();
     });
 
     canvas.on("selection:updated", () => {
       emitSelection();
-      restyleAllFurniture(canvas, scheduleRender);
+      restyleAllFurniture(canvas);
       clearGuides(canvas, guidesRef);
       scheduleRender();
     });
 
     canvas.on("selection:cleared", () => {
       onSelectionChangeRef.current?.(null);
-      restyleAllFurniture(canvas, scheduleRender);
+      restyleAllFurniture(canvas);
       clearGuides(canvas, guidesRef);
       scheduleRender();
     });
@@ -337,7 +353,7 @@ export default forwardRef<
 
       obj.setCoords();
       emitSelection();
-      restyleAllFurniture(canvas, scheduleRender);
+      restyleAllFurniture(canvas);
       clearGuides(canvas, guidesRef);
 
       pushHistoryNow(canvas);
@@ -356,14 +372,14 @@ export default forwardRef<
 
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
-        if (e.shiftKey) redo(scheduleRender);
-        else undo(scheduleRender);
+        if (e.shiftKey) redoInternal();
+        else undoInternal();
         return;
       }
 
       if (mod && e.key.toLowerCase() === "y") {
         e.preventDefault();
-        redo(scheduleRender);
+        redoInternal();
         return;
       }
 
@@ -377,7 +393,7 @@ export default forwardRef<
         canvas.remove(active);
         canvas.discardActiveObject();
         onSelectionChangeRef.current?.(null);
-        restyleAllFurniture(canvas, scheduleRender);
+        restyleAllFurniture(canvas);
         clearGuides(canvas, guidesRef);
 
         pushHistoryNow(canvas);
@@ -408,14 +424,14 @@ export default forwardRef<
         );
         isApplyingHistoryRef.current = false;
 
-        restyleAllFurniture(canvas, scheduleRender);
+        restyleAllFurniture(canvas);
         historyRef.current = [saved];
         historyIndexRef.current = 0;
       } catch {
         isApplyingHistoryRef.current = false;
       }
     } else {
-      restyleAllFurniture(canvas, scheduleRender);
+      restyleAllFurniture(canvas);
     }
 
     scheduleRender();
@@ -432,8 +448,13 @@ export default forwardRef<
 
       clearGuides(canvas, guidesRef);
       canvas.dispose();
+
       fabricCanvasRef.current = null;
       roomRef.current = null;
+
+      scheduleRenderRef.current = null;
+      undoRef.current = null;
+      redoRef.current = null;
     };
   }, []);
 
@@ -446,8 +467,7 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         addFurniture(canvas, room, type);
-        // render scheduler lives inside effect; render anyway:
-        canvas.requestRenderAll();
+        restyleAllFurniture(canvas);
         pushHistoryNow(canvas);
       },
 
@@ -461,10 +481,12 @@ export default forwardRef<
         canvas.remove(active);
         canvas.discardActiveObject();
         onSelectionChangeRef.current?.(null);
+
+        restyleAllFurniture(canvas);
         clearGuides(canvas, guidesRef);
-        canvas.requestRenderAll();
 
         pushHistoryNow(canvas);
+        safeRender();
       },
 
       duplicateSelected() {
@@ -515,10 +537,11 @@ export default forwardRef<
         canvas.setActiveObject(rect);
 
         onSelectionChangeRef.current?.(getSelectedInfo(rect as any));
+        restyleAllFurniture(canvas);
         clearGuides(canvas, guidesRef);
 
-        canvas.requestRenderAll();
         pushHistoryNow(canvas);
+        safeRender();
       },
 
       setSelectedProps(patch) {
@@ -550,11 +573,12 @@ export default forwardRef<
         snapFurnitureToRoomGrid(active, room, GRID_SIZE);
 
         active.setCoords();
+        restyleAllFurniture(canvas);
         clearGuides(canvas, guidesRef);
-        canvas.requestRenderAll();
 
         onSelectionChangeRef.current?.(getSelectedInfo(active));
         pushHistoryNow(canvas);
+        safeRender();
       },
 
       fitRoom() {
@@ -564,16 +588,15 @@ export default forwardRef<
 
         fitRoomToView(canvas, room);
         clearGuides(canvas, guidesRef);
-        canvas.requestRenderAll();
+        safeRender();
       },
 
       undo() {
-        // fallback: will be handled by keyboard. Keeping no-op to avoid complexity here.
-        // If you want imperative undo/redo, we can refactor to store undo/redo refs.
+        undoRef.current?.();
       },
 
       redo() {
-        // same note as undo()
+        redoRef.current?.();
       },
 
       save() {
@@ -591,10 +614,11 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         );
         if (json) {
+          restyleAllFurniture(canvas);
           historyRef.current = [json];
           historyIndexRef.current = 0;
           scheduleAutosave();
-          canvas.requestRenderAll();
+          safeRender();
         }
       },
 
@@ -609,12 +633,18 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        importJson(canvas, room, json, () =>
+        const res = importJson(canvas, room, json, () =>
           onSelectionChangeRef.current?.(null)
         );
-        historyRef.current = [json];
+
+        if (!res.ok) return;
+
+        restyleAllFurniture(canvas);
+        historyRef.current = [localStorage.getItem(STORAGE_KEY) ?? json];
         historyIndexRef.current = 0;
-        canvas.requestRenderAll();
+
+        pushHistoryNow(canvas);
+        safeRender();
       },
     }),
     []
