@@ -1,6 +1,11 @@
 "use client";
 
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import React, {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 import { Canvas, Rect, Line } from "fabric";
 
 import {
@@ -91,7 +96,7 @@ function drawGridLines(canvas: Canvas, room: Rect, gridSize: number) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fabricCanvasRef = useRef<Canvas | null>(null);
@@ -119,7 +124,11 @@ export default forwardRef<
   const gridLinesRef = useRef<Line[]>([]);
 
   // clipboard
-  const clipboardRef = useRef<any | null>(null);
+  const clipboardRef = useRef<any[] | null>(null);
+
+  // nudge batching
+  const nudgeTimerRef = useRef<number | null>(null);
+  const nudgeDirtyRef = useRef(false);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -154,6 +163,7 @@ export default forwardRef<
       const baseStroke = o.data?.baseStroke ?? "#10b981";
       const baseStrokeWidth = o.data?.baseStrokeWidth ?? 2;
 
+      // Note: with multi-select, active is an ActiveSelection; we keep normal strokes.
       if (active && o === active) {
         o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
       } else {
@@ -173,6 +183,15 @@ export default forwardRef<
     scheduleAutosave();
   };
 
+  const restackFixedBackground = () => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    canvas.sendObjectToBack(room);
+    for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
+  };
+
   const rebuildGrid = () => {
     const canvas = fabricCanvasRef.current;
     const room = roomRef.current;
@@ -187,6 +206,7 @@ export default forwardRef<
       canvas.sendObjectToBack(room);
     }
 
+    restackFixedBackground();
     safeRender();
   };
 
@@ -250,16 +270,16 @@ export default forwardRef<
 
   const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
-  // Multi-select helper (NEW)
   const getSelectedFurnitureObjects = (canvas: Canvas): any[] => {
     const active: any = canvas.getActiveObject();
     if (!active) return [];
 
-    const objs: any[] = Array.isArray(active?._objects) ? active._objects : [active];
+    const objs: any[] = Array.isArray(active?._objects)
+      ? active._objects
+      : [active];
     return objs.filter((o) => isFurniture(o));
   };
 
-  // Copy / Paste helpers
   const cloneSelectedToClipboard = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -267,7 +287,6 @@ export default forwardRef<
     const selected = getSelectedFurnitureObjects(canvas);
     if (selected.length === 0) return;
 
-    // store array to support multi-copy
     clipboardRef.current = selected.map((active: any) => ({
       left: active.left ?? 0,
       top: active.top ?? 0,
@@ -295,7 +314,7 @@ export default forwardRef<
     const room = roomRef.current;
     if (!canvas || !room) return;
 
-    const snaps: any[] | null = clipboardRef.current;
+    const snaps = clipboardRef.current;
     if (!snaps || snaps.length === 0) return;
 
     const grid = gridSizeRef.current ?? GRID_SIZE;
@@ -345,12 +364,10 @@ export default forwardRef<
       clones.push(rect);
     }
 
-    // select pasted group
     canvas.discardActiveObject();
     if (clones.length === 1) {
       canvas.setActiveObject(clones[0]);
     } else {
-      // Fabric v7 exports ActiveSelection on fabric namespace, but keep safe fallback
       const anyCanvas: any = canvas as any;
       const ActiveSelectionCtor =
         anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
@@ -370,7 +387,6 @@ export default forwardRef<
     safeRender();
   };
 
-  // Selection emitter (supports multi-select)
   const emitSelection = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -382,8 +398,81 @@ export default forwardRef<
       return;
     }
 
-    // send first item info (simple + works with your current sidebar)
     onSelectionChangeRef.current?.(getSelectedInfo(selected[0]));
+  };
+
+  const scheduleNudgeCommit = () => {
+    nudgeDirtyRef.current = true;
+
+    if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
+
+    nudgeTimerRef.current = window.setTimeout(() => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return;
+      if (!nudgeDirtyRef.current) return;
+
+      nudgeDirtyRef.current = false;
+      pushHistoryNow(canvas);
+    }, 220);
+  };
+
+  const nudgeSelected = (dx: number, dy: number, skipClamp = false) => {
+    const canvas = fabricCanvasRef.current;
+    const room = roomRef.current;
+    if (!canvas || !room) return;
+
+    const selected = getSelectedFurnitureObjects(canvas);
+    if (selected.length === 0) return;
+
+    for (const o of selected) {
+      o.set({
+        left: (o.left ?? 0) + dx,
+        top: (o.top ?? 0) + dy,
+      });
+      o.setCoords();
+      if (!skipClamp) clampFurnitureInsideRoom(o, room);
+      o.setCoords();
+    }
+
+    const active: any = canvas.getActiveObject();
+    if (active && Array.isArray(active?._objects)) {
+      active.setCoords?.();
+    }
+
+    emitSelection();
+    restyleAllFurniture(canvas);
+    clearGuides(canvas, guidesRef);
+    safeRender();
+
+    scheduleNudgeCommit();
+  };
+
+  const moveLayer = (dir: "up" | "down", toEdge: boolean) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const selected = getSelectedFurnitureObjects(canvas);
+    if (selected.length === 0) return;
+
+    const objs = dir === "up" ? [...selected] : [...selected].reverse();
+
+    for (const o of objs) {
+      if (toEdge) {
+        if (dir === "up") canvas.bringObjectToFront(o);
+        else canvas.sendObjectToBack(o);
+      } else {
+        if (dir === "up") canvas.bringObjectForward(o);
+        else canvas.sendObjectBackwards(o);
+      }
+    }
+
+    restackFixedBackground();
+
+    restyleAllFurniture(canvas);
+    clearGuides(canvas, guidesRef);
+    safeRender();
+
+    pushHistoryNow(canvas);
   };
 
   useEffect(() => {
@@ -419,7 +508,6 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    // zoom
     canvas.on("mouse:wheel", (opt) => {
       const event = opt.e as WheelEvent;
 
@@ -434,7 +522,6 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // pan
     let isPanning = false;
     let lastClientX = 0;
     let lastClientY = 0;
@@ -448,15 +535,6 @@ export default forwardRef<
       canvas.defaultCursor = "grabbing";
       lastClientX = e.clientX;
       lastClientY = e.clientY;
-    });
-
-    canvas.on("mouse:move", () => {
-      if (!isPanning) return;
-
-      // Fabric's mouse:move doesn't reliably provide clientX/clientY on opt.e in all cases,
-      // so we use the native event from the canvas element.
-      // But to keep your previous behavior, we read from window event when available.
-      // If you want, we can refactor pan to use opt.e only.
     });
 
     canvas.on("mouse:move", (opt) => {
@@ -502,7 +580,6 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // hover (skip hover style for group selection target)
     canvas.on("mouse:over", (opt) => {
       const t = opt.target as any;
       if (!t || !isFurniture(t)) return;
@@ -529,7 +606,6 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // resize snap (Alt disables)
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
       if (!obj || !isFurniture(obj)) {
@@ -564,7 +640,6 @@ export default forwardRef<
       safeRender();
     });
 
-    // Shift rotation snap
     canvas.on("object:rotating", (opt) => {
       const obj = opt.target as any;
       if (obj && isFurniture(obj) && isShiftPressedRef.current) {
@@ -579,8 +654,6 @@ export default forwardRef<
 
     canvas.on("object:moving", (opt) => {
       const obj = opt.target as any;
-
-      // for multi-move, Fabric sends each object; we clamp each furniture
       if (!obj || !isFurniture(obj)) return;
 
       obj.setCoords();
@@ -600,8 +673,6 @@ export default forwardRef<
 
     canvas.on("object:modified", (opt) => {
       const obj = opt.target as any;
-
-      // If a group was moved, Fabric may fire modified for each object.
       if (!obj || !isFurniture(obj)) return;
 
       const grid = gridSizeRef.current;
@@ -618,7 +689,6 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         isSpacePressedRef.current = true;
@@ -629,6 +699,39 @@ export default forwardRef<
 
       const isMac = navigator.platform.toLowerCase().includes("mac");
       const mod = isMac ? e.metaKey : e.ctrlKey;
+
+      // Layers: [ and ] (NEW)
+      if (e.key === "[" || e.key === "]") {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+        e.preventDefault();
+
+        const toEdge = e.shiftKey;
+        if (e.key === "]") moveLayer("up", toEdge);
+        if (e.key === "[") moveLayer("down", toEdge);
+
+        return;
+      }
+
+      // Arrow key nudge
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+        e.preventDefault();
+
+        const grid = gridSizeRef.current ?? GRID_SIZE;
+        const step = e.shiftKey ? grid : 1;
+        const skipClamp = isAltPressedRef.current;
+
+        if (e.key === "ArrowLeft") nudgeSelected(-step, 0, skipClamp);
+        if (e.key === "ArrowRight") nudgeSelected(step, 0, skipClamp);
+        if (e.key === "ArrowUp") nudgeSelected(0, -step, skipClamp);
+        if (e.key === "ArrowDown") nudgeSelected(0, step, skipClamp);
+
+        return;
+      }
 
       // Copy / Paste
       if (mod && e.key.toLowerCase() === "c") {
@@ -686,10 +789,8 @@ export default forwardRef<
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    // history init
     pushHistoryNow(canvas);
 
-    // autoload
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
@@ -719,6 +820,11 @@ export default forwardRef<
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
+      }
+
+      if (nudgeTimerRef.current) {
+        window.clearTimeout(nudgeTimerRef.current);
+        nudgeTimerRef.current = null;
       }
 
       clearGuides(canvas, guidesRef);
@@ -798,7 +904,8 @@ export default forwardRef<
             hoverCursor: "move",
           });
 
-          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry)
+            rect.set({ rx: active.rx, ry: active.ry });
 
           rect.scaleX = active.scaleX ?? 1;
           rect.scaleY = active.scaleY ?? 1;
@@ -820,14 +927,14 @@ export default forwardRef<
           clones.push(rect);
         }
 
-        // select duplicated group
         canvas.discardActiveObject();
         if (clones.length === 1) {
           canvas.setActiveObject(clones[0]);
         } else {
           const anyCanvas: any = canvas as any;
           const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
+            anyCanvas?.ActiveSelection ||
+            (window as any)?.fabric?.ActiveSelection;
           if (ActiveSelectionCtor) {
             const sel = new ActiveSelectionCtor(clones, { canvas });
             canvas.setActiveObject(sel);
@@ -850,8 +957,8 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         const active = canvas.getActiveObject() as any;
-        // only allow editing single object for now
-        if (!active || !isFurniture(active) || Array.isArray(active?._objects)) return;
+        if (!active || !isFurniture(active) || Array.isArray(active?._objects))
+          return;
 
         if (typeof patch.width === "number" && patch.width > 1) {
           const current = active.getBoundingRect(false, true).width;
