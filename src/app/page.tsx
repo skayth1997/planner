@@ -6,6 +6,7 @@ import type {
   PlannerCanvasHandle,
   SelectedInfo,
 } from "@/components/canvas/planner-canvas/planner-types";
+import { GRID_SIZE } from "@/components/canvas/planner-canvas/planner-constants";
 
 function cls(...x: Array<string | false | undefined>) {
   return x.filter(Boolean).join(" ");
@@ -38,6 +39,10 @@ export default function HomePage() {
   const [a, setA] = useState<string>("");
 
   const [importText, setImportText] = useState("");
+
+  // NEW: grid controls
+  const [gridVisible, setGridVisible] = useState(true);
+  const [gridSize, setGridSize] = useState<number>(GRID_SIZE);
 
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
@@ -81,8 +86,52 @@ export default function HomePage() {
         <div>
           <h1 className="text-xl font-semibold text-neutral-900">Planner</h1>
           <p className="text-sm text-neutral-500">
-            Scroll = zoom • Hold <b>Space</b> = pan • Select item to edit
+            Scroll = zoom • Hold <b>Space</b> = pan • Hold <b>Shift</b> = snap
+            rotate / disable align snap
           </p>
+        </div>
+
+        {/* NEW: Grid controls */}
+        <div className="rounded-lg border border-neutral-200 bg-white p-3">
+          <div className="text-sm font-semibold text-neutral-700 mb-2">
+            Grid
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-neutral-800">
+            <input
+              type="checkbox"
+              checked={gridVisible}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setGridVisible(v);
+                canvasRef.current?.setGridVisible(v);
+              }}
+            />
+            Show grid
+          </label>
+
+          <div className="mt-2">
+            <label className="text-xs text-neutral-600">
+              Grid size (snap)
+              <select
+                value={gridSize}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setGridSize(v);
+                  canvasRef.current?.setGridSize(v);
+                }}
+                className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">
+              Tip: Larger grid = faster placement, smaller grid = precision.
+            </p>
+          </div>
         </div>
 
         <div className="rounded-lg border border-neutral-200 bg-white p-3">
@@ -218,11 +267,7 @@ export default function HomePage() {
 
               <div className="flex gap-2">
                 <button
-                  className={cls(
-                    btnBase,
-                    btnDark,
-                    !canEdit && btnDisabled
-                  )}
+                  className={cls(btnBase, btnDark, !canEdit && btnDisabled)}
                   disabled={!canEdit}
                   onClick={applyProps}
                 >
@@ -230,11 +275,7 @@ export default function HomePage() {
                 </button>
 
                 <button
-                  className={cls(
-                    btnBase,
-                    btnNeutral,
-                    !canEdit && btnDisabled
-                  )}
+                  className={cls(btnBase, btnNeutral, !canEdit && btnDisabled)}
                   disabled={!canEdit}
                   onClick={() => canvasRef.current?.duplicateSelected()}
                 >
@@ -259,13 +300,17 @@ export default function HomePage() {
         </div>
 
         <div className="mt-auto text-xs text-neutral-500">
-          Pro tip: Use Delete / Backspace to remove selected item. Ctrl/⌘+Z undo.
+          Pro tip: Delete/Backspace removes selected item. Ctrl/⌘+Z undo. Hold
+          Shift to snap rotation.
         </div>
       </aside>
 
       <section className="p-4">
         <div className="w-full h-full">
-          <PlannerCanvas ref={canvasRef} onSelectionChange={onSelectionChange} />
+          <PlannerCanvas
+            ref={canvasRef}
+            onSelectionChange={onSelectionChange}
+          />
         </div>
       </section>
     </main>

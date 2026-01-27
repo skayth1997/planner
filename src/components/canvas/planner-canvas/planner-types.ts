@@ -19,6 +19,7 @@ export type PlannerCanvasHandle = {
   setSelectedProps: (
     patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle">>
   ) => void;
+
   fitRoom: () => void;
 
   undo: () => void;
@@ -28,6 +29,10 @@ export type PlannerCanvasHandle = {
   load: () => void;
   exportJson: () => void;
   importJsonString: (json: string) => void;
+
+  // NEW
+  setGridVisible: (visible: boolean) => void;
+  setGridSize: (size: number) => void;
 };
 
 export type FurnitureSnapshot = {
