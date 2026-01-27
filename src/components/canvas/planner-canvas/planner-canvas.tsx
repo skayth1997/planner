@@ -596,6 +596,7 @@ export default forwardRef<
       canvas,
       room,
       handles,
+      gridSize: gridSizeRef.current,
       onRoomChanging: () => {
         rebuildGrid();
 

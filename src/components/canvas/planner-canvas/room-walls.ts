@@ -2,6 +2,14 @@ import { Polygon, Circle, Canvas } from "fabric";
 
 export type RoomPoint = { x: number; y: number };
 
+function snap(v: number, grid: number) {
+  return Math.round(v / grid) * grid;
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export function createRoomPolygon(canvas: Canvas) {
   // initial rectangle (same position as old Rect)
   const pts: RoomPoint[] = [
@@ -51,6 +59,7 @@ export function createCornerHandles(canvas: Canvas, room: Polygon) {
       originX: "center",
       originY: "center",
       selectable: true,
+      evented: true,
       hasControls: false,
       hasBorders: false,
       lockScalingX: true,
@@ -81,21 +90,26 @@ export function syncHandlesToRoom(handles: Circle[], room: Polygon) {
   });
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-export function attachWallEditing(args: {
+type AttachArgs = {
   canvas: Canvas;
   room: Polygon;
   handles: Circle[];
+  gridSize: number;
+  minSize?: number; // bbox min w/h
   onRoomChanging?: () => void;
   onRoomChanged?: () => void;
-}) {
-  const { canvas, room, handles, onRoomChanging, onRoomChanged } = args;
+};
 
-  const MIN_W = 200;
-  const MIN_H = 200;
+export function attachWallEditing(args: AttachArgs) {
+  const {
+    canvas,
+    room,
+    handles,
+    gridSize,
+    minSize = 200,
+    onRoomChanging,
+    onRoomChanged,
+  } = args;
 
   const getAABB = () => {
     const r = room.getBoundingRect();
@@ -104,6 +118,8 @@ export function attachWallEditing(args: {
       top: r.top,
       right: r.left + r.width,
       bottom: r.top + r.height,
+      width: r.width,
+      height: r.height,
     };
   };
 
@@ -113,15 +129,21 @@ export function attachWallEditing(args: {
 
       const pts = getRoomPoints(room);
 
-      // new point from handle center
-      const nx = h.left ?? 0;
-      const ny = h.top ?? 0;
+      // snap handle to grid (center-based)
+      let nx = h.left ?? 0;
+      let ny = h.top ?? 0;
 
-      // Update point
+      nx = snap(nx, gridSize);
+      ny = snap(ny, gridSize);
+
+      // Apply snapped coords to handle immediately (visual consistency)
+      h.set({ left: nx, top: ny });
+      h.setCoords();
+
+      // Update room point
       pts[idx] = { x: nx, y: ny };
 
-      // Keep room roughly valid in MVP: enforce min bbox size
-      // We do it by clamping the moved handle inside a bbox based on other points.
+      // Keep bbox not collapsing below minSize (simple MVP constraint)
       const xs = pts.map((p) => p.x);
       const ys = pts.map((p) => p.y);
       const minX = Math.min(...xs);
@@ -129,23 +151,30 @@ export function attachWallEditing(args: {
       const minY = Math.min(...ys);
       const maxY = Math.max(...ys);
 
-      // if too small, clamp moved point away from opposite side
-      let x = pts[idx].x;
-      let y = pts[idx].y;
-
       const width = maxX - minX;
       const height = maxY - minY;
 
-      if (width < MIN_W) {
+      if (width < minSize || height < minSize) {
+        // revert this move a bit using previous aabb center idea
+        // simplest: clamp the moved point inside a huge safe range but try not to collapse
         const aabb = getAABB();
-        x = clamp(x, aabb.left - 2000, aabb.right + 2000); // don't explode
-      }
-      if (height < MIN_H) {
-        const aabb = getAABB();
-        y = clamp(y, aabb.top - 2000, aabb.bottom + 2000);
-      }
+        const cx = (aabb.left + aabb.right) / 2;
+        const cy = (aabb.top + aabb.bottom) / 2;
 
-      pts[idx] = { x, y };
+        // push point away from center if too small
+        if (width < minSize) {
+          nx = nx < cx ? cx - minSize / 2 : cx + minSize / 2;
+          nx = snap(nx, gridSize);
+        }
+        if (height < minSize) {
+          ny = ny < cy ? cy - minSize / 2 : cy + minSize / 2;
+          ny = snap(ny, gridSize);
+        }
+
+        h.set({ left: nx, top: ny });
+        h.setCoords();
+        pts[idx] = { x: nx, y: ny };
+      }
 
       setRoomPoints(room, pts);
       syncHandlesToRoom(handles, room);
