@@ -1,3 +1,4 @@
+// src/components/canvas/planner-canvas/planner-canvas.tsx
 "use client";
 
 import React, {
@@ -23,6 +24,7 @@ import type {
   FurnitureType,
   GuideLine,
   RoomSize,
+  CanvasSnapshotItem,
 } from "./core/planner-types";
 
 import { isFurniture, getSelectedInfo, makeId } from "./core/utils";
@@ -104,8 +106,8 @@ export default forwardRef<
   // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
-  // clipboard
-  const clipboardRef = useRef<any[] | null>(null);
+  // clipboard (now supports furniture + openings)
+  const clipboardRef = useRef<CanvasSnapshotItem[] | null>(null);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -119,6 +121,7 @@ export default forwardRef<
   const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
   const getSelectedFurnitureObjects = (): any[] => {
+    // name kept for compatibility; selection controller now returns furniture + openings
     return selectionRef.current?.getSelectedFurnitureObjects() ?? [];
   };
 
@@ -145,26 +148,56 @@ export default forwardRef<
     const selected = getSelectedFurnitureObjects();
     if (selected.length === 0) return;
 
-    clipboardRef.current = selected.map((active: any) => ({
-      left: active.left ?? 0,
-      top: active.top ?? 0,
-      width: active.width ?? 0,
-      height: active.height ?? 0,
-      angle: active.angle ?? 0,
-      rx: active.rx,
-      ry: active.ry,
-      fill: active.fill,
-      stroke: active.stroke,
-      strokeWidth: active.strokeWidth ?? 2,
-      scaleX: active.scaleX ?? 1,
-      scaleY: active.scaleY ?? 1,
-      data: {
-        kind: "furniture",
-        type: active.data?.type ?? "unknown",
-        baseStroke: active.data?.baseStroke ?? "#10b981",
-        baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
-      },
-    }));
+    clipboardRef.current = selected
+      .filter((o) => isFurniture(o) || isOpening(o))
+      .map((o: any): CanvasSnapshotItem => {
+        // furniture
+        if (isFurniture(o)) {
+          return {
+            left: o.left ?? 0,
+            top: o.top ?? 0,
+            width: o.width ?? 0,
+            height: o.height ?? 0,
+            angle: o.angle ?? 0,
+            rx: o.rx,
+            ry: o.ry,
+            fill: o.fill,
+            stroke: o.stroke,
+            strokeWidth: o.strokeWidth ?? 2,
+            scaleX: o.scaleX ?? 1,
+            scaleY: o.scaleY ?? 1,
+            data: {
+              kind: "furniture",
+              type: o.data?.type ?? "unknown",
+              id: o.data?.id ?? makeId(),
+              baseStroke: o.data?.baseStroke ?? "#10b981",
+              baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
+            },
+          };
+        }
+
+        // opening
+        return {
+          left: o.left ?? 0,
+          top: o.top ?? 0,
+          width: o.width ?? 0,
+          height: o.height ?? 0,
+          angle: o.angle ?? 0,
+          fill: o.fill,
+          stroke: o.stroke,
+          strokeWidth: o.strokeWidth ?? 2,
+          scaleX: o.scaleX ?? 1,
+          scaleY: o.scaleY ?? 1,
+          data: {
+            kind: "opening",
+            type: o.data?.type ?? "door",
+            id: o.data?.id ?? makeId(),
+            segIndex: Number(o.data?.segIndex) || 0,
+            t: typeof o.data?.t === "number" ? o.data.t : 0.5,
+            offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
+          },
+        };
+      });
   };
 
   const pasteFromClipboard = () => {
@@ -179,53 +212,111 @@ export default forwardRef<
     const clones: Rect[] = [];
 
     for (const snap of snaps) {
-      const rect = new Rect({
-        left: (snap.left ?? 0) + grid,
-        top: (snap.top ?? 0) + grid,
-        width: snap.width ?? 60,
-        height: snap.height ?? 60,
-        fill: snap.fill ?? "rgba(16,185,129,0.25)",
-        stroke: snap.stroke ?? "#10b981",
-        strokeWidth: snap.strokeWidth ?? 2,
-        selectable: true,
-        evented: true,
-        hasControls: true,
-        hasBorders: true,
-        lockScalingFlip: true,
-        transparentCorners: false,
-        angle: snap.angle ?? 0,
-        hoverCursor: "move",
-      });
+      // furniture
+      if ((snap as any).data?.kind === "furniture") {
+        const s: any = snap;
 
-      if (typeof snap.rx === "number" && typeof snap.ry === "number") {
-        rect.set({ rx: snap.rx, ry: snap.ry });
+        const rect = new Rect({
+          left: (s.left ?? 0) + grid,
+          top: (s.top ?? 0) + grid,
+          width: s.width ?? 60,
+          height: s.height ?? 60,
+          fill: s.fill ?? "rgba(16,185,129,0.25)",
+          stroke: s.stroke ?? "#10b981",
+          strokeWidth: s.strokeWidth ?? 2,
+          selectable: true,
+          evented: true,
+          hasControls: true,
+          hasBorders: true,
+          lockScalingFlip: true,
+          transparentCorners: false,
+          angle: s.angle ?? 0,
+          hoverCursor: "move",
+        });
+
+        if (typeof s.rx === "number" && typeof s.ry === "number") {
+          rect.set({ rx: s.rx, ry: s.ry });
+        }
+
+        rect.scaleX = s.scaleX ?? 1;
+        rect.scaleY = s.scaleY ?? 1;
+
+        (rect as any).data = {
+          kind: "furniture",
+          type: s.data?.type ?? "unknown",
+          id: makeId(),
+          baseStroke: s.data?.baseStroke ?? "#10b981",
+          baseStrokeWidth: s.data?.baseStrokeWidth ?? 2,
+        };
+
+        canvas.add(rect);
+
+        clampFurnitureInsideRoomPolygon(rect as any, room as any);
+        clampFurnitureInsideRoom(rect as any, room as any);
+        snapFurnitureToRoomGrid(rect as any, room as any, grid);
+
+        rect.setCoords();
+        clones.push(rect);
+        continue;
       }
 
-      rect.scaleX = snap.scaleX ?? 1;
-      rect.scaleY = snap.scaleY ?? 1;
+      // opening
+      if ((snap as any).data?.kind === "opening") {
+        const s: any = snap;
 
-      (rect as any).data = {
-        kind: "furniture",
-        type: snap.data?.type ?? "unknown",
-        id: makeId(),
-        baseStroke: snap.data?.baseStroke ?? "#10b981",
-        baseStrokeWidth: snap.data?.baseStrokeWidth ?? 2,
-      };
+        const rect = new Rect({
+          left: (s.left ?? 0) + grid,
+          top: (s.top ?? 0) + grid,
+          width: s.width ?? 80,
+          height: s.height ?? 10,
+          fill:
+            s.fill ??
+            (s.data?.type === "window"
+              ? "rgba(59,130,246,0.18)"
+              : "rgba(245,158,11,0.25)"),
+          stroke:
+            s.stroke ?? (s.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
+          strokeWidth: s.strokeWidth ?? 2,
+          selectable: true,
+          evented: true,
+          hasControls: true,
+          hasBorders: true,
+          lockScalingFlip: true,
+          transparentCorners: false,
+          angle: s.angle ?? 0,
+          hoverCursor: "move",
+          originX: "center",
+          originY: "center",
+        });
 
-      canvas.add(rect);
+        rect.scaleX = s.scaleX ?? 1;
+        rect.scaleY = s.scaleY ?? 1;
 
-      clampFurnitureInsideRoomPolygon(rect as any, room as any);
-      clampFurnitureInsideRoom(rect as any, room as any);
-      snapFurnitureToRoomGrid(rect as any, room as any, grid);
+        (rect as any).data = {
+          kind: "opening",
+          type: s.data?.type ?? "door",
+          id: makeId(),
+          segIndex: Number(s.data?.segIndex) || 0,
+          t: typeof s.data?.t === "number" ? s.data.t : 0.5,
+          offset: typeof s.data?.offset === "number" ? s.data.offset : 0,
+        };
 
-      rect.setCoords();
-      clones.push(rect);
+        canvas.add(rect);
+
+        // IMPORTANT: resnap to wall so it attaches to correct segment after paste
+        snapOpeningToNearestWall(rect as any, room as any);
+
+        rect.setCoords();
+        clones.push(rect);
+        continue;
+      }
     }
 
+    // set active selection
     canvas.discardActiveObject();
     if (clones.length === 1) {
       canvas.setActiveObject(clones[0]);
-    } else {
+    } else if (clones.length > 1) {
       const anyCanvas: any = canvas as any;
       const ActiveSelectionCtor =
         anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
@@ -272,9 +363,12 @@ export default forwardRef<
         top: (o.top ?? 0) + dy,
       });
       o.setCoords();
-      if (!skipClamp) {
+      if (!skipClamp && isFurniture(o)) {
         clampFurnitureInsideRoomPolygon(o, room as any);
         clampFurnitureInsideRoom(o, room as any);
+      }
+      if (!skipClamp && isOpening(o)) {
+        snapOpeningToNearestWall(o, room as any);
       }
       o.setCoords();
     }
@@ -469,6 +563,7 @@ export default forwardRef<
         gridRef.current?.restack();
         selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
+        updateOpeningsForRoomChange(canvas, room as any);
       },
       autosaveExtra: () => {
         // keep room points saved together with item autosave
@@ -541,12 +636,22 @@ export default forwardRef<
     // transforms
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
-      if (!obj || !isFurniture(obj)) {
+
+      // openings scaling is allowed (Fabric will handle) — we just keep selection updated
+      if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
         emitSelection();
         return;
       }
 
+      // if Alt: free scale (no snapping)
       if (isAltPressedRef.current) {
+        emitSelection();
+        safeRender();
+        return;
+      }
+
+      // only snap furniture scaling to grid
+      if (!isFurniture(obj)) {
         emitSelection();
         safeRender();
         return;
@@ -575,7 +680,7 @@ export default forwardRef<
 
     canvas.on("object:rotating", (opt) => {
       const obj = opt.target as any;
-      if (obj && isFurniture(obj) && isShiftPressedRef.current) {
+      if (obj && (isFurniture(obj) || isOpening(obj)) && isShiftPressedRef.current) {
         const step = 15;
         const a = obj.angle ?? 0;
         obj.angle = Math.round(a / step) * step;
@@ -731,46 +836,92 @@ export default forwardRef<
         const grid = getGridSize();
         const clones: Rect[] = [];
 
-        for (const active of selected) {
-          const rect = new Rect({
-            left: (active.left ?? 0) + grid,
-            top: (active.top ?? 0) + grid,
-            width: active.width,
-            height: active.height,
-            fill: active.fill,
-            stroke: active.stroke,
-            strokeWidth: active.strokeWidth,
-            selectable: true,
-            evented: true,
-            hasControls: true,
-            hasBorders: true,
-            lockScalingFlip: true,
-            transparentCorners: false,
-            angle: active.angle ?? 0,
-            hoverCursor: "move",
-          });
+        for (const active of selected as any[]) {
+          // ===== furniture =====
+          if (isFurniture(active)) {
+            const rect = new Rect({
+              left: (active.left ?? 0) + grid,
+              top: (active.top ?? 0) + grid,
+              width: active.width,
+              height: active.height,
+              fill: active.fill,
+              stroke: active.stroke,
+              strokeWidth: active.strokeWidth,
+              selectable: true,
+              evented: true,
+              hasControls: true,
+              hasBorders: true,
+              lockScalingFlip: true,
+              transparentCorners: false,
+              angle: active.angle ?? 0,
+              hoverCursor: "move",
+            });
 
-          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+            if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
 
-          rect.scaleX = active.scaleX ?? 1;
-          rect.scaleY = active.scaleY ?? 1;
+            rect.scaleX = active.scaleX ?? 1;
+            rect.scaleY = active.scaleY ?? 1;
 
-          (rect as any).data = {
-            kind: "furniture",
-            type: active.data?.type ?? "unknown",
-            id: makeId(),
-            baseStroke: active.data?.baseStroke ?? "#10b981",
-            baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
-          };
+            (rect as any).data = {
+              kind: "furniture",
+              type: active.data?.type ?? "unknown",
+              id: makeId(),
+              baseStroke: active.data?.baseStroke ?? "#10b981",
+              baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
+            };
 
-          canvas.add(rect);
+            canvas.add(rect);
 
-          clampFurnitureInsideRoomPolygon(rect as any, room as any);
-          clampFurnitureInsideRoom(rect as any, room as any);
-          snapFurnitureToRoomGrid(rect as any, room as any, grid);
+            clampFurnitureInsideRoomPolygon(rect as any, room as any);
+            clampFurnitureInsideRoom(rect as any, room as any);
+            snapFurnitureToRoomGrid(rect as any, room as any, grid);
 
-          rect.setCoords();
-          clones.push(rect);
+            rect.setCoords();
+            clones.push(rect);
+            continue;
+          }
+
+          // ===== opening =====
+          if (isOpening(active)) {
+            const rect = new Rect({
+              left: (active.left ?? 0) + grid,
+              top: (active.top ?? 0) + grid,
+              width: active.width ?? 80,
+              height: active.height ?? 10,
+              fill: active.fill,
+              stroke: active.stroke,
+              strokeWidth: active.strokeWidth ?? 2,
+              selectable: true,
+              evented: true,
+              hasControls: true,
+              hasBorders: true,
+              lockScalingFlip: true,
+              transparentCorners: false,
+              angle: active.angle ?? 0,
+              hoverCursor: "move",
+              originX: "center",
+              originY: "center",
+            });
+
+            rect.scaleX = active.scaleX ?? 1;
+            rect.scaleY = active.scaleY ?? 1;
+
+            (rect as any).data = {
+              kind: "opening",
+              type: active.data?.type ?? "door",
+              id: makeId(),
+              segIndex: Number(active.data?.segIndex) || 0,
+              t: typeof active.data?.t === "number" ? active.data.t : 0.5,
+              offset: typeof active.data?.offset === "number" ? active.data.offset : 0,
+            };
+
+            canvas.add(rect);
+
+            snapOpeningToNearestWall(rect as any, room as any);
+
+            rect.setCoords();
+            clones.push(rect);
+          }
         }
 
         canvas.discardActiveObject();
@@ -802,9 +953,17 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         const active = canvas.getActiveObject() as any;
-        if (!active || !isFurniture(active) || Array.isArray(active?._objects))
-          return;
+        if (!active) return;
 
+        // Do not support editing ActiveSelection from side panel (MVP)
+        if (Array.isArray(active?._objects)) return;
+
+        const isF = isFurniture(active);
+        const isO = isOpening(active);
+
+        if (!isF && !isO) return;
+
+        // Apply width/height by scaling to match bounding rect size
         if (typeof patch.width === "number" && patch.width > 1) {
           const current = active.getBoundingRect(false, true).width;
           const factor = patch.width / Math.max(1, current);
@@ -821,11 +980,20 @@ export default forwardRef<
 
         active.setCoords();
 
-        clampFurnitureInsideRoomPolygon(active, room as any);
-        clampFurnitureInsideRoom(active, room as any);
-        snapFurnitureToRoomGrid(active, room as any, getGridSize());
+        // Constraints
+        if (isF) {
+          clampFurnitureInsideRoomPolygon(active, room as any);
+          clampFurnitureInsideRoom(active, room as any);
+
+          snapFurnitureToRoomGrid(active, room as any, getGridSize());
+        }
+
+        if (isO) {
+          snapOpeningToNearestWall(active, room as any);
+        }
 
         active.setCoords();
+
         selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
 

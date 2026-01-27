@@ -1,4 +1,3 @@
-// src/components/canvas/planner-canvas/selection/selection-controller.ts
 import type { Canvas } from "fabric";
 import type { SelectedInfo } from "../core/planner-types";
 import { getSelectedInfo, isFurniture, isOpening } from "../core/utils";
