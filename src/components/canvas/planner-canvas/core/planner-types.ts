@@ -1,11 +1,17 @@
-// src/components/canvas/planner-canvas/core/planner-types.ts
 import type { Rect, Line } from "fabric";
 
 export type FurnitureType = "sofa" | "table" | "chair";
+export type OpeningType = "door" | "window";
 
 export type SelectedInfo = {
   id: string;
-  type: FurnitureType | "unknown";
+
+  // ✅ NEW (so panel can show what is selected)
+  kind: "furniture" | "opening" | "unknown";
+
+  // furniture type OR opening type
+  type: FurnitureType | OpeningType | "unknown";
+
   left: number;
   top: number;
   width: number; // actual width (scaled)
@@ -33,11 +39,9 @@ export type PlannerCanvasHandle = {
   exportJson: () => void;
   importJsonString: (json: string) => void;
 
-  // NEW
   getRoomSize: () => RoomSize;
   setRoomSize: (size: RoomSize) => void;
 
-  // optional (you already have these implemented in canvas)
   setGridVisible?: (visible: boolean) => void;
   setGridSize?: (size: number) => void;
 };
@@ -68,8 +72,6 @@ export type GuideLine = Line;
 
 export type IsFurnitureFn = (obj: any) => obj is Rect;
 
-export type OpeningType = "door" | "window";
-
 export type OpeningSnapshot = {
   left: number;
   top: number;
@@ -86,17 +88,14 @@ export type OpeningSnapshot = {
     type: OpeningType;
     id: string;
 
-    // wall attachment
-    segIndex: number; // which wall segment
-    t: number; // 0..1 along the segment
-    offset: number; // signed distance along normal (px)
+    segIndex: number;
+    t: number;
+    offset: number;
   };
 };
 
-// ✅ NEW: union snapshot items (v4 can contain both)
 export type CanvasSnapshotItem = FurnitureSnapshot | OpeningSnapshot;
 
-// ✅ NEW: export/import container format v4
 export type PlanSnapshotV4 = {
   version: 4;
   room: { points: { x: number; y: number }[] };
