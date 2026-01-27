@@ -1,10 +1,17 @@
-import type { Canvas } from "fabric";
-import type { Polygon } from "fabric";
+// src/components/canvas/planner-canvas/persistence/persistence.ts
+import type { Canvas, Polygon } from "fabric";
 import { STORAGE_KEY, STORAGE_ROOM_KEY } from "../core/planner-constants";
 import { serializeState, restoreFromJson } from "../history/history";
 
 type RoomPoint = { x: number; y: number };
 type RoomStateV3 = { points: RoomPoint[] };
+
+// v4 payload (room points + items that include furniture + openings)
+type PlanSnapshotV4 = {
+  version: 4;
+  room: RoomStateV3;
+  items: any[];
+};
 
 function safeParseJson<T = any>(text: string): T | null {
   try {
@@ -48,13 +55,13 @@ export function loadNow(
     const parsed = safeParseJson(roomJson);
     if (
       parsed &&
-      Array.isArray(parsed.points) &&
-      parsed.points.every(
+      Array.isArray((parsed as any).points) &&
+      (parsed as any).points.every(
         (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
       ) &&
-      parsed.points.length >= 3
+      (parsed as any).points.length >= 3
     ) {
-      roomState = { points: parsed.points };
+      roomState = { points: (parsed as any).points };
       setRoomPoints(room, roomState.points);
     }
   }
@@ -65,18 +72,18 @@ export function loadNow(
   return { layoutJson: itemsJson, roomState };
 }
 
-/** Export to file (v3) */
+/** Export to file (v4) */
 export function exportJson(canvas: Canvas, room: Polygon) {
   const itemsJson = serializeState(canvas);
   const roomState: RoomStateV3 = { points: getRoomPoints(room) };
 
-  const payload = JSON.stringify({
-    version: 3,
+  const payload: PlanSnapshotV4 = {
+    version: 4,
     room: roomState,
     items: safeParseJson(itemsJson) ?? [],
-  });
+  };
 
-  const blob = new Blob([payload], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement("a");
@@ -91,9 +98,10 @@ export function exportJson(canvas: Canvas, room: Polygon) {
 
 /**
  * Import supports:
- * - v1: [FurnitureSnapshot,...]
- * - v2: {version:2, room:{width,height}, items:[...]}   (legacy)
- * - v3: {version:3, room:{points:[{x,y}...]}, items:[...]}
+ * - v1: [FurnitureSnapshot,...]  (legacy array, furniture only)
+ * - v2: {version:2, room:{width,height}, items:[...]}   (legacy, room ignored now)
+ * - v3: {version:3, room:{points:[{x,y}...]}, items:[...]} (room points + items; often furniture only)
+ * - v4: {version:4, room:{points:[{x,y}...]}, items:[...]} (room points + items includes openings)
  */
 export function importJsonString(
   canvas: Canvas,
@@ -111,12 +119,12 @@ export function importJsonString(
     return;
   }
 
-  // v2/v3 object
+  // v2/v3/v4 object
   if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).items)) {
     const version = Number((parsed as any).version);
 
-    // v3: room points
-    if (version === 3 && (parsed as any).room?.points) {
+    // v3/v4: room points
+    if ((version === 3 || version === 4) && (parsed as any).room?.points) {
       const pts = (parsed as any).room.points;
       if (
         Array.isArray(pts) &&
@@ -129,16 +137,16 @@ export function importJsonString(
       }
     }
 
-    // v2: room width/height (legacy) -> we ignore because room is polygon now
-    // (optional: you could convert width/height to rectangle points if you want)
+    // v2: room width/height (legacy) -> ignored (room is polygon now)
 
+    // items-only JSON (history/history.ts can restore furniture + openings)
     const itemsOnly = JSON.stringify((parsed as any).items);
     restoreFromJson(canvas as any, room as any, itemsOnly, onClearSelection);
     localStorage.setItem(STORAGE_KEY, itemsOnly);
     return;
   }
 
-  // If invalid, try as raw items (will throw in restoreFromJson)
+  // fallback: try restore as raw items array json
   restoreFromJson(canvas as any, room as any, json, onClearSelection);
   localStorage.setItem(STORAGE_KEY, json);
 }

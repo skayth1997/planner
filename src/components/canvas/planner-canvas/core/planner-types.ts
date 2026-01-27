@@ -1,3 +1,4 @@
+// src/components/canvas/planner-canvas/core/planner-types.ts
 import type { Rect, Line } from "fabric";
 
 export type FurnitureType = "sofa" | "table" | "chair";
@@ -87,7 +88,17 @@ export type OpeningSnapshot = {
 
     // wall attachment
     segIndex: number; // which wall segment
-    t: number;        // 0..1 along the segment
-    offset: number;   // signed distance along normal (px)
+    t: number; // 0..1 along the segment
+    offset: number; // signed distance along normal (px)
   };
+};
+
+// ✅ NEW: union snapshot items (v4 can contain both)
+export type CanvasSnapshotItem = FurnitureSnapshot | OpeningSnapshot;
+
+// ✅ NEW: export/import container format v4
+export type PlanSnapshotV4 = {
+  version: 4;
+  room: { points: { x: number; y: number }[] };
+  items: CanvasSnapshotItem[];
 };
