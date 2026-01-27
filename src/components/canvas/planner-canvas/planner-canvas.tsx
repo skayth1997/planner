@@ -33,6 +33,7 @@ import { isFurniture, getSelectedInfo, makeId } from "./utils";
 import {
   addFurniture,
   clampFurnitureInsideRoom,
+  clampFurnitureInsideRoomPolygon,
   snapFurnitureToRoomGrid,
 } from "./furniture";
 import { fitRoomToView } from "./fit";
@@ -54,18 +55,17 @@ import {
   syncHandlesToRoom,
 } from "./room-walls";
 
-/** Render throttling: at most 1 render per animation frame */
-function createRenderScheduler(canvas: Canvas) {
-  let raf: number | null = null;
-  return function scheduleRender() {
-    if (raf) return;
-    raf = requestAnimationFrame(() => {
-      raf = null;
-      canvas.requestRenderAll();
-    });
-  };
-}
+import { createRenderScheduler } from "./render";
 
+import {
+  isOpening,
+  snapOpeningToNearestWall,
+  updateOpeningsForRoomChange,
+} from "./openings";
+
+import { attachKeyboardController } from "./keyboard-controller";
+
+/** Grid (AABB) helper */
 function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
   const lines: Line[] = [];
 
@@ -106,16 +106,17 @@ function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+  >(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
 
-  // ROOM is polygon now
+  // ROOM polygon
   const roomRef = useRef<Polygon | null>(null);
   const roomHandlesRef = useRef<Circle[]>([]);
 
+  // keyboard state
   const isSpacePressedRef = useRef(false);
   const isShiftPressedRef = useRef(false);
   const isAltPressedRef = useRef(false);
@@ -132,7 +133,7 @@ export default forwardRef<
   // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
-  // grid state
+  // grid
   const gridVisibleRef = useRef(true);
   const gridSizeRef = useRef<number>(GRID_SIZE);
   const gridLinesRef = useRef<Line[]>([]);
@@ -163,11 +164,9 @@ export default forwardRef<
       if (!canvas || !room) return;
 
       try {
-        // items
         const json = serializeState(canvas);
         localStorage.setItem(STORAGE_KEY, json);
 
-        // room points
         const pts = getRoomPoints(room);
         localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
       } catch {}
@@ -183,7 +182,6 @@ export default forwardRef<
       const baseStroke = o.data?.baseStroke ?? "#10b981";
       const baseStrokeWidth = o.data?.baseStrokeWidth ?? 2;
 
-      // With multi-select, active is ActiveSelection; keep normal strokes
       if (active && o === active) {
         o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
       } else {
@@ -208,13 +206,8 @@ export default forwardRef<
     const room = roomRef.current;
     if (!canvas || !room) return;
 
-    // room below furniture
     canvas.sendObjectToBack(room);
-
-    // grid below room (since it is inside room area, bottommost is fine)
     for (const l of gridLinesRef.current) canvas.sendObjectToBack(l);
-
-    // handles above everything
     for (const h of roomHandlesRef.current) canvas.bringObjectToFront(h);
   };
 
@@ -356,7 +349,6 @@ export default forwardRef<
     if (!snaps || snaps.length === 0) return;
 
     const grid = gridSizeRef.current ?? GRID_SIZE;
-
     const clones: Rect[] = [];
 
     for (const snap of snaps) {
@@ -395,6 +387,7 @@ export default forwardRef<
 
       canvas.add(rect);
 
+      clampFurnitureInsideRoomPolygon(rect as any, room as any);
       clampFurnitureInsideRoom(rect as any, room as any);
       snapFurnitureToRoomGrid(rect as any, room as any, grid);
 
@@ -454,7 +447,10 @@ export default forwardRef<
         top: (o.top ?? 0) + dy,
       });
       o.setCoords();
-      if (!skipClamp) clampFurnitureInsideRoom(o, room as any);
+      if (!skipClamp) {
+        clampFurnitureInsideRoomPolygon(o, room as any);
+        clampFurnitureInsideRoom(o, room as any);
+      }
       o.setCoords();
     }
 
@@ -499,7 +495,25 @@ export default forwardRef<
     pushHistoryNow(canvas);
   };
 
-  // ===== Room API (based on polygon bounding box) =====
+  const deleteSelectedInternal = () => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const selected = getSelectedFurnitureObjects(canvas);
+    if (selected.length === 0) return;
+
+    for (const o of selected) canvas.remove(o);
+
+    canvas.discardActiveObject();
+    onSelectionChangeRef.current?.(null);
+    restyleAllFurniture(canvas);
+    clearGuides(canvas, guidesRef);
+
+    pushHistoryNow(canvas);
+    safeRender();
+  };
+
+  // ===== Room API (bbox) =====
   const getRoomSizeInternal = (): RoomSize => {
     const room = roomRef.current;
     if (!room) return { width: 0, height: 0 };
@@ -536,9 +550,11 @@ export default forwardRef<
     syncHandlesToRoom(roomHandlesRef.current, room);
 
     rebuildGrid();
+    updateOpeningsForRoomChange(canvas, room as any);
 
     canvas.getObjects().forEach((o: any) => {
       if (!isFurniture(o)) return;
+      clampFurnitureInsideRoomPolygon(o, room as any);
       clampFurnitureInsideRoom(o, room as any);
       o.setCoords();
     });
@@ -565,11 +581,10 @@ export default forwardRef<
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
 
-    // === Create room polygon + handles ===
+    // room + handles
     const room = createRoomPolygon(canvas);
     roomRef.current = room;
 
-    // Load saved room points (if any)
     const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
     if (savedRoom) {
       try {
@@ -577,14 +592,11 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) =>
-                p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
-          if (pts.length >= 3) {
-            setRoomPoints(room, pts);
-          }
+          if (pts.length >= 3) setRoomPoints(room, pts);
         }
       } catch {}
     }
@@ -599,9 +611,11 @@ export default forwardRef<
       gridSize: gridSizeRef.current,
       onRoomChanging: () => {
         rebuildGrid();
+        updateOpeningsForRoomChange(canvas, room as any);
 
         canvas.getObjects().forEach((o: any) => {
           if (!isFurniture(o)) return;
+          clampFurnitureInsideRoomPolygon(o, room as any);
           clampFurnitureInsideRoom(o, room as any);
           o.setCoords();
         });
@@ -612,15 +626,13 @@ export default forwardRef<
       onRoomChanged: () => {
         fitRoomToView(canvas, room);
         rebuildGrid();
+        updateOpeningsForRoomChange(canvas, room as any);
+
         pushHistoryNow(canvas);
 
-        // persist points
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
         } catch {}
       },
     });
@@ -743,7 +755,7 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // keep panel updated during transforms
+    // transforms
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
       if (!obj || !isFurniture(obj)) {
@@ -792,10 +804,21 @@ export default forwardRef<
 
     canvas.on("object:moving", (opt) => {
       const obj = opt.target as any;
-      if (!obj || !isFurniture(obj)) return;
+      if (!obj) return;
+
+      if (isOpening(obj)) {
+        snapOpeningToNearestWall(obj, room as any);
+        obj.setCoords();
+        emitSelection();
+        scheduleRender();
+        return;
+      }
+
+      if (!isFurniture(obj)) return;
 
       obj.setCoords();
 
+      clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
 
       if (!isShiftPressedRef.current) {
@@ -810,11 +833,24 @@ export default forwardRef<
 
     canvas.on("object:modified", (opt) => {
       const obj = opt.target as any;
-      if (!obj || !isFurniture(obj)) return;
+      if (!obj) return;
+
+      if (isOpening(obj)) {
+        snapOpeningToNearestWall(obj, room as any);
+        obj.setCoords();
+        emitSelection();
+        pushHistoryNow(canvas);
+        scheduleRender();
+        return;
+      }
+
+      if (!isFurniture(obj)) return;
 
       const grid = gridSizeRef.current;
 
       snapFurnitureToRoomGrid(obj, room as any, grid);
+
+      clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
 
       obj.setCoords();
@@ -826,113 +862,28 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // keyboard
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        isSpacePressedRef.current = true;
-        canvas.defaultCursor = "grab";
-      }
-      if (e.key === "Shift") isShiftPressedRef.current = true;
-      if (e.key === "Alt") isAltPressedRef.current = true;
-
-      const isMac = navigator.platform.toLowerCase().includes("mac");
-      const mod = isMac ? e.metaKey : e.ctrlKey;
-
-      // layers
-      if (e.key === "[" || e.key === "]") {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-        e.preventDefault();
-
-        const toEdge = e.shiftKey;
-        if (e.key === "]") moveLayer("up", toEdge);
-        if (e.key === "[") moveLayer("down", toEdge);
-
-        return;
-      }
-
-      // arrow nudge
-      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-        e.preventDefault();
-
-        const grid = gridSizeRef.current ?? GRID_SIZE;
-        const step = e.shiftKey ? grid : 1;
-        const skipClamp = isAltPressedRef.current;
-
-        if (e.key === "ArrowLeft") nudgeSelected(-step, 0, skipClamp);
-        if (e.key === "ArrowRight") nudgeSelected(step, 0, skipClamp);
-        if (e.key === "ArrowUp") nudgeSelected(0, -step, skipClamp);
-        if (e.key === "ArrowDown") nudgeSelected(0, step, skipClamp);
-
-        return;
-      }
-
-      // copy / paste
-      if (mod && e.key.toLowerCase() === "c") {
-        e.preventDefault();
-        cloneSelectedToClipboard();
-        return;
-      }
-      if (mod && e.key.toLowerCase() === "v") {
-        e.preventDefault();
-        pasteFromClipboard();
-        return;
-      }
-
-      // undo / redo
-      if (mod && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        if (e.shiftKey) redoInternal();
-        else undoInternal();
-        return;
-      }
-
-      if (mod && e.key.toLowerCase() === "y") {
-        e.preventDefault();
-        redoInternal();
-        return;
-      }
-
-      // delete
-      if (e.key === "Delete" || e.key === "Backspace") {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-        const selected = getSelectedFurnitureObjects(canvas);
-        if (selected.length === 0) return;
-
-        for (const o of selected) canvas.remove(o);
-
-        canvas.discardActiveObject();
-        onSelectionChangeRef.current?.(null);
-        restyleAllFurniture(canvas);
-        clearGuides(canvas, guidesRef);
-
-        pushHistoryNow(canvas);
-        scheduleRender();
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        isSpacePressedRef.current = false;
-        canvas.defaultCursor = "default";
-      }
-      if (e.key === "Shift") isShiftPressedRef.current = false;
-      if (e.key === "Alt") isAltPressedRef.current = false;
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+    // ✅ Keyboard controller (extracted)
+    const detachKeyboard = attachKeyboardController({
+      canvas,
+      isSpacePressedRef,
+      isShiftPressedRef,
+      isAltPressedRef,
+      getGridSize: () => gridSizeRef.current ?? GRID_SIZE,
+      actions: {
+        moveLayer,
+        nudgeSelected,
+        copySelected: cloneSelectedToClipboard,
+        paste: pasteFromClipboard,
+        undo: undoInternal,
+        redo: redoInternal,
+        deleteSelected: deleteSelectedInternal,
+      },
+    });
 
     // history init
     pushHistoryNow(canvas);
 
-    // autoload items
+    // autoload
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
@@ -956,8 +907,8 @@ export default forwardRef<
 
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
+
+      detachKeyboard();
 
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
@@ -999,22 +950,7 @@ export default forwardRef<
       },
 
       deleteSelected() {
-        const canvas = fabricCanvasRef.current;
-        if (!canvas) return;
-
-        const selected = getSelectedFurnitureObjects(canvas);
-        if (selected.length === 0) return;
-
-        for (const o of selected) canvas.remove(o);
-
-        canvas.discardActiveObject();
-        onSelectionChangeRef.current?.(null);
-
-        restyleAllFurniture(canvas);
-        clearGuides(canvas, guidesRef);
-
-        pushHistoryNow(canvas);
-        safeRender();
+        deleteSelectedInternal();
       },
 
       duplicateSelected() {
@@ -1026,7 +962,6 @@ export default forwardRef<
         if (selected.length === 0) return;
 
         const grid = gridSizeRef.current ?? GRID_SIZE;
-
         const clones: Rect[] = [];
 
         for (const active of selected) {
@@ -1048,8 +983,7 @@ export default forwardRef<
             hoverCursor: "move",
           });
 
-          if (active.rx && active.ry)
-            rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
 
           rect.scaleX = active.scaleX ?? 1;
           rect.scaleY = active.scaleY ?? 1;
@@ -1064,6 +998,7 @@ export default forwardRef<
 
           canvas.add(rect);
 
+          clampFurnitureInsideRoomPolygon(rect as any, room as any);
           clampFurnitureInsideRoom(rect as any, room as any);
           snapFurnitureToRoomGrid(rect as any, room as any, grid);
 
@@ -1077,8 +1012,7 @@ export default forwardRef<
         } else {
           const anyCanvas: any = canvas as any;
           const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection ||
-            (window as any)?.fabric?.ActiveSelection;
+            anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
           if (ActiveSelectionCtor) {
             const sel = new ActiveSelectionCtor(clones, { canvas });
             canvas.setActiveObject(sel);
@@ -1120,6 +1054,7 @@ export default forwardRef<
 
         active.setCoords();
 
+        clampFurnitureInsideRoomPolygon(active, room as any);
         clampFurnitureInsideRoom(active, room as any);
         snapFurnitureToRoomGrid(active, room as any, gridSizeRef.current);
 
@@ -1162,12 +1097,14 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        const { layoutJson } = loadNow(canvas, room, () => onSelectionChangeRef.current?.(null));
+        const { layoutJson } = loadNow(canvas, room, () =>
+          onSelectionChangeRef.current?.(null)
+        );
 
-        // after room points applied, move handles to corners
         syncHandlesToRoom(roomHandlesRef.current, room);
 
         rebuildGrid();
+        updateOpeningsForRoomChange(canvas, room as any);
         restyleAllFurniture(canvas);
 
         if (layoutJson) {
@@ -1191,11 +1128,14 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        importJson(canvas, room, json, () => onSelectionChangeRef.current?.(null));
+        importJson(canvas, room, json, () =>
+          onSelectionChangeRef.current?.(null)
+        );
 
         syncHandlesToRoom(roomHandlesRef.current, room);
 
         rebuildGrid();
+        updateOpeningsForRoomChange(canvas, room as any);
         restyleAllFurniture(canvas);
 
         const stored = localStorage.getItem(STORAGE_KEY) ?? null;
@@ -1214,7 +1154,6 @@ export default forwardRef<
         setGridSizeInternal(size);
       },
 
-      // Room size by bbox
       getRoomSize() {
         return getRoomSizeInternal();
       },

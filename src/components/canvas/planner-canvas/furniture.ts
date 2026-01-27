@@ -3,6 +3,51 @@ import { Rect } from "fabric";
 import type { FurnitureType } from "./planner-types";
 import { GRID_SIZE } from "./planner-constants";
 import { isFurniture, makeId } from "./utils";
+import type { Polygon } from "fabric";
+import {
+  pointInPolygon,
+  nearestPointOnPolygon,
+  polygonCentroid,
+} from "./polygon-geometry";
+
+function getRoomPolygonPoints(room: any) {
+  // Works because we store polygon points in absolute canvas coords
+  const pts = (room.points ?? []) as any[];
+  return pts.map((p) => ({ x: p.x, y: p.y }));
+}
+
+export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
+  if (!obj?.data || obj.data.kind !== "furniture") return;
+
+  const poly = getRoomPolygonPoints(room);
+  if (poly.length < 3) return;
+
+  // Use object center (stable & fast)
+  const center = obj.getCenterPoint();
+  const p = { x: center.x, y: center.y };
+
+  if (pointInPolygon(p, poly)) return;
+
+  const nearest = nearestPointOnPolygon(p, poly);
+
+  // Nudge slightly inside (towards polygon centroid)
+  const c = polygonCentroid(poly);
+  let vx = c.x - nearest.x;
+  let vy = c.y - nearest.y;
+  const len = Math.hypot(vx, vy) || 1;
+  vx /= len;
+  vy /= len;
+
+  const EPS = 2; // px inward
+  const target = { x: nearest.x + vx * EPS, y: nearest.y + vy * EPS };
+
+  const dx = target.x - p.x;
+  const dy = target.y - p.y;
+
+  obj.left = (obj.left ?? 0) + dx;
+  obj.top = (obj.top ?? 0) + dy;
+  obj.setCoords();
+}
 
 function getRoomInnerAABB(room: any) {
   const r = room.getBoundingRect();

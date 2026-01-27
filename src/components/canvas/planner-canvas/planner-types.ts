@@ -66,3 +66,28 @@ export type FurnitureSnapshot = {
 export type GuideLine = Line;
 
 export type IsFurnitureFn = (obj: any) => obj is Rect;
+
+export type OpeningType = "door" | "window";
+
+export type OpeningSnapshot = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  angle: number;
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  scaleX?: number;
+  scaleY?: number;
+  data: {
+    kind: "opening";
+    type: OpeningType;
+    id: string;
+
+    // wall attachment
+    segIndex: number; // which wall segment
+    t: number;        // 0..1 along the segment
+    offset: number;   // signed distance along normal (px)
+  };
+};
