@@ -5,7 +5,7 @@ import PlannerCanvas from "@/components/canvas/planner-canvas/planner-canvas";
 import type {
   PlannerCanvasHandle,
   SelectedInfo,
-} from "@/components/canvas/planner-canvas/planner-types";
+} from "@/components/canvas/planner-canvas/core/planner-types";
 
 function cls(...x: Array<string | false | undefined>) {
   return x.filter(Boolean).join(" ");
