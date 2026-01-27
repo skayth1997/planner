@@ -1,78 +1,79 @@
-import type { Canvas, Rect } from "fabric";
+import type { Canvas } from "fabric";
+import type { Polygon } from "fabric";
 import { STORAGE_KEY, STORAGE_ROOM_KEY } from "./planner-constants";
 import { serializeState, restoreFromJson } from "./history";
 
-type RoomSize = { width: number; height: number };
+type RoomPoint = { x: number; y: number };
+type RoomStateV3 = { points: RoomPoint[] };
 
-function readRoomSizeFromRoom(room: Rect): RoomSize {
-  // room.width/height are "base" (not scaled)
-  const stroke = room.strokeWidth ?? 0;
-  return {
-    width: Math.round((room.width ?? 0) + stroke),
-    height: Math.round((room.height ?? 0) + stroke),
-  };
+function safeParseJson<T = any>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
 }
 
-function applyRoomSizeToRoom(room: Rect, size: RoomSize) {
-  const stroke = room.strokeWidth ?? 0;
-  const min = 150;
+function getRoomPoints(room: Polygon): RoomPoint[] {
+  const pts = (room.points ?? []) as any[];
+  return pts.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }));
+}
 
-  const nextW = Math.max(min, Math.round(size.width));
-  const nextH = Math.max(min, Math.round(size.height));
-
-  // Keep visual size consistent with current convention: width/height exclude full stroke
-  room.set({
-    width: Math.max(1, nextW - stroke),
-    height: Math.max(1, nextH - stroke),
-  });
+function setRoomPoints(room: Polygon, points: RoomPoint[]) {
+  room.set({ points: points as any });
   room.setCoords();
 }
 
-export function saveNow(canvas: Canvas, room: Rect) {
-  const json = serializeState(canvas);
-  localStorage.setItem(STORAGE_KEY, json);
+/** Save items + room points to localStorage */
+export function saveNow(canvas: Canvas, room: Polygon) {
+  const itemsJson = serializeState(canvas);
+  localStorage.setItem(STORAGE_KEY, itemsJson);
 
-  const roomSize = readRoomSizeFromRoom(room);
-  localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(roomSize));
+  const roomState: RoomStateV3 = { points: getRoomPoints(room) };
+  localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(roomState));
 }
 
+/** Load items + room points from localStorage */
 export function loadNow(
   canvas: Canvas,
-  room: Rect,
+  room: Polygon,
   onClearSelection: () => void
-): { layoutJson: string | null; roomSize: RoomSize | null } {
-  const json = localStorage.getItem(STORAGE_KEY);
+): { layoutJson: string | null; roomState: RoomStateV3 | null } {
+  const itemsJson = localStorage.getItem(STORAGE_KEY);
   const roomJson = localStorage.getItem(STORAGE_ROOM_KEY);
 
-  let roomSize: RoomSize | null = null;
+  let roomState: RoomStateV3 | null = null;
+
   if (roomJson) {
-    try {
-      const parsed = JSON.parse(roomJson);
-      if (
-        parsed &&
-        typeof parsed.width === "number" &&
-        typeof parsed.height === "number"
-      ) {
-        roomSize = { width: parsed.width, height: parsed.height };
-        applyRoomSizeToRoom(room, roomSize);
-      }
-    } catch {}
+    const parsed = safeParseJson(roomJson);
+    if (
+      parsed &&
+      Array.isArray(parsed.points) &&
+      parsed.points.every(
+        (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
+      ) &&
+      parsed.points.length >= 3
+    ) {
+      roomState = { points: parsed.points };
+      setRoomPoints(room, roomState.points);
+    }
   }
 
-  if (!json) return { layoutJson: null, roomSize };
+  if (!itemsJson) return { layoutJson: null, roomState };
 
-  restoreFromJson(canvas, room, json, onClearSelection);
-  return { layoutJson: json, roomSize };
+  restoreFromJson(canvas as any, room as any, itemsJson, onClearSelection);
+  return { layoutJson: itemsJson, roomState };
 }
 
-export function exportJson(canvas: Canvas, room: Rect) {
+/** Export to file (v3) */
+export function exportJson(canvas: Canvas, room: Polygon) {
   const itemsJson = serializeState(canvas);
-  const roomSize = readRoomSizeFromRoom(room);
+  const roomState: RoomStateV3 = { points: getRoomPoints(room) };
 
   const payload = JSON.stringify({
-    version: 2,
-    room: roomSize,
-    items: JSON.parse(itemsJson),
+    version: 3,
+    room: roomState,
+    items: safeParseJson(itemsJson) ?? [],
   });
 
   const blob = new Blob([payload], { type: "application/json" });
@@ -88,44 +89,56 @@ export function exportJson(canvas: Canvas, room: Rect) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Import supports:
+ * - v1: [FurnitureSnapshot,...]
+ * - v2: {version:2, room:{width,height}, items:[...]}   (legacy)
+ * - v3: {version:3, room:{points:[{x,y}...]}, items:[...]}
+ */
 export function importJsonString(
   canvas: Canvas,
-  room: Rect,
+  room: Polygon,
   json: string,
   onClearSelection: () => void
 ) {
-  // Supports:
-  // - v1: [FurnitureSnapshot,...]
-  // - v2: {version:2, room:{width,height}, items:[...]}
-  try {
-    const parsed = JSON.parse(json);
+  const parsed = safeParseJson(json);
 
-    if (Array.isArray(parsed)) {
-      restoreFromJson(canvas, room, json, onClearSelection);
-      localStorage.setItem(STORAGE_KEY, json);
-      return;
-    }
-
-    if (parsed && Array.isArray(parsed.items)) {
-      if (
-        parsed.room &&
-        typeof parsed.room.width === "number" &&
-        typeof parsed.room.height === "number"
-      ) {
-        localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(parsed.room));
-        applyRoomSizeToRoom(room, parsed.room);
-      }
-
-      const itemsOnly = JSON.stringify(parsed.items);
-      restoreFromJson(canvas, room, itemsOnly, onClearSelection);
-      localStorage.setItem(STORAGE_KEY, itemsOnly);
-      return;
-    }
-  } catch {
-    // fall through
+  // v1: items array only
+  if (Array.isArray(parsed)) {
+    const itemsOnly = JSON.stringify(parsed);
+    restoreFromJson(canvas as any, room as any, itemsOnly, onClearSelection);
+    localStorage.setItem(STORAGE_KEY, itemsOnly);
+    return;
   }
 
-  // If invalid JSON, we still try original behavior (will throw inside restoreFromJson)
-  restoreFromJson(canvas, room, json, onClearSelection);
+  // v2/v3 object
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).items)) {
+    const version = Number((parsed as any).version);
+
+    // v3: room points
+    if (version === 3 && (parsed as any).room?.points) {
+      const pts = (parsed as any).room.points;
+      if (
+        Array.isArray(pts) &&
+        pts.length >= 3 &&
+        pts.every((p: any) => p && typeof p.x === "number" && typeof p.y === "number")
+      ) {
+        const roomState: RoomStateV3 = { points: pts };
+        setRoomPoints(room, roomState.points);
+        localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(roomState));
+      }
+    }
+
+    // v2: room width/height (legacy) -> we ignore because room is polygon now
+    // (optional: you could convert width/height to rectangle points if you want)
+
+    const itemsOnly = JSON.stringify((parsed as any).items);
+    restoreFromJson(canvas as any, room as any, itemsOnly, onClearSelection);
+    localStorage.setItem(STORAGE_KEY, itemsOnly);
+    return;
+  }
+
+  // If invalid, try as raw items (will throw in restoreFromJson)
+  restoreFromJson(canvas as any, room as any, json, onClearSelection);
   localStorage.setItem(STORAGE_KEY, json);
 }

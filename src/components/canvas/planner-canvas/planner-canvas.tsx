@@ -1,6 +1,11 @@
 "use client";
 
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import React, {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
 import { Canvas, Rect, Line, Polygon, Circle } from "fabric";
 
 import {
@@ -101,7 +106,7 @@ function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -293,7 +298,9 @@ export default forwardRef<
     const active: any = canvas.getActiveObject();
     if (!active) return [];
 
-    const objs: any[] = Array.isArray(active?._objects) ? active._objects : [active];
+    const objs: any[] = Array.isArray(active?._objects)
+      ? active._objects
+      : [active];
     return objs.filter((o) => isFurniture(o));
   };
 
@@ -569,7 +576,10 @@ export default forwardRef<
         const parsed = JSON.parse(savedRoom);
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
-            .filter((p: any) => p && typeof p.x === "number" && typeof p.y === "number")
+            .filter(
+              (p: any) =>
+                p && typeof p.x === "number" && typeof p.y === "number"
+            )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
           if (pts.length >= 3) {
@@ -606,7 +616,10 @@ export default forwardRef<
         // persist points
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -1034,7 +1047,8 @@ export default forwardRef<
             hoverCursor: "move",
           });
 
-          if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+          if (active.rx && active.ry)
+            rect.set({ rx: active.rx, ry: active.ry });
 
           rect.scaleX = active.scaleX ?? 1;
           rect.scaleY = active.scaleY ?? 1;
@@ -1062,7 +1076,8 @@ export default forwardRef<
         } else {
           const anyCanvas: any = canvas as any;
           const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
+            anyCanvas?.ActiveSelection ||
+            (window as any)?.fabric?.ActiveSelection;
           if (ActiveSelectionCtor) {
             const sel = new ActiveSelectionCtor(clones, { canvas });
             canvas.setActiveObject(sel);
@@ -1085,7 +1100,8 @@ export default forwardRef<
         if (!canvas || !room) return;
 
         const active = canvas.getActiveObject() as any;
-        if (!active || !isFurniture(active) || Array.isArray(active?._objects)) return;
+        if (!active || !isFurniture(active) || Array.isArray(active?._objects))
+          return;
 
         if (typeof patch.width === "number" && patch.width > 1) {
           const current = active.getBoundingRect(false, true).width;
@@ -1137,9 +1153,7 @@ export default forwardRef<
         const canvas = fabricCanvasRef.current;
         const room = roomRef.current;
         if (!canvas || !room) return;
-        // NOTE: your saveNow must accept (canvas, room) OR keep old and rely on autosave.
-        // If your current saveNow(canvas) signature is old, update it as we discussed.
-        saveNow(canvas as any, room as any);
+        saveNow(canvas, room);
       },
 
       load() {
@@ -1147,16 +1161,9 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        const res = loadNow(canvas as any, room as any, () =>
-          onSelectionChangeRef.current?.(null)
-        );
+        const { layoutJson } = loadNow(canvas, room, () => onSelectionChangeRef.current?.(null));
 
-        // if loadNow returns string in your old version, adapt it. New version returns object.
-        const layoutJson =
-          typeof (res as any) === "string" ? (res as any) : (res as any)?.layoutJson;
-
-        // room points may be applied inside persistence OR are in localStorage (already loaded)
-        // After load, sync handles with current room
+        // after room points applied, move handles to corners
         syncHandlesToRoom(roomHandlesRef.current, room);
 
         rebuildGrid();
@@ -1165,9 +1172,9 @@ export default forwardRef<
         if (layoutJson) {
           historyRef.current = [layoutJson];
           historyIndexRef.current = 0;
+          scheduleAutosave();
         }
 
-        scheduleAutosave();
         safeRender();
       },
 
@@ -1175,7 +1182,7 @@ export default forwardRef<
         const canvas = fabricCanvasRef.current;
         const room = roomRef.current;
         if (!canvas || !room) return;
-        exportJsonFile(canvas as any, room as any);
+        exportJsonFile(canvas, room);
       },
 
       importJsonString(json: string) {
@@ -1183,18 +1190,15 @@ export default forwardRef<
         const room = roomRef.current;
         if (!canvas || !room) return;
 
-        importJson(canvas as any, room as any, json, () =>
-          onSelectionChangeRef.current?.(null)
-        );
+        importJson(canvas, room, json, () => onSelectionChangeRef.current?.(null));
 
-        // If room points were included in import, room is already updated.
         syncHandlesToRoom(roomHandlesRef.current, room);
 
         rebuildGrid();
         restyleAllFurniture(canvas);
 
-        const stored = localStorage.getItem(STORAGE_KEY) ?? json;
-        historyRef.current = [stored];
+        const stored = localStorage.getItem(STORAGE_KEY) ?? null;
+        historyRef.current = [stored ?? serializeState(canvas)];
         historyIndexRef.current = 0;
 
         pushHistoryNow(canvas);
