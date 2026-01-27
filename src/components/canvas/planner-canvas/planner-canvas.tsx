@@ -64,6 +64,7 @@ import {
 } from "./openings";
 
 import { attachKeyboardController } from "./keyboard-controller";
+import { attachMouseController } from "./mouse-controller";
 
 /** Grid (AABB) helper */
 function drawGridLines(canvas: Canvas, room: any, gridSize: number) {
@@ -653,57 +654,15 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    // zoom
-    canvas.on("mouse:wheel", (opt) => {
-      const event = opt.e as WheelEvent;
-
-      let zoom = canvas.getZoom();
-      zoom *= ZOOM_SENSITIVITY ** event.deltaY;
-      zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
-
-      canvas.zoomToPoint({ x: event.offsetX, y: event.offsetY }, zoom);
-
-      event.preventDefault();
-      event.stopPropagation();
-      scheduleRender();
-    });
-
-    // pan
-    let isPanning = false;
-    let lastClientX = 0;
-    let lastClientY = 0;
-
-    canvas.on("mouse:down", (opt) => {
-      if (!isSpacePressedRef.current) return;
-
-      const e = opt.e as MouseEvent;
-      isPanning = true;
-      canvas.selection = false;
-      canvas.defaultCursor = "grabbing";
-      lastClientX = e.clientX;
-      lastClientY = e.clientY;
-    });
-
-    canvas.on("mouse:move", (opt) => {
-      if (!isPanning) return;
-
-      const e = opt.e as MouseEvent;
-      const vpt = canvas.viewportTransform!;
-      vpt[4] += e.clientX - lastClientX;
-      vpt[5] += e.clientY - lastClientY;
-
-      lastClientX = e.clientX;
-      lastClientY = e.clientY;
-
-      scheduleRender();
-    });
-
-    canvas.on("mouse:up", () => {
-      isPanning = false;
-      canvas.selection = true;
-      canvas.defaultCursor = "default";
-      clearGuides(canvas, guidesRef);
-      scheduleRender();
+    // ✅ Mouse controller (extracted zoom + pan)
+    const detachMouse = attachMouseController({
+      canvas,
+      isSpacePressedRef,
+      zoom: { min: ZOOM_MIN, max: ZOOM_MAX, sensitivity: ZOOM_SENSITIVITY },
+      scheduleRender,
+      onPanEnd: () => {
+        clearGuides(canvas, guidesRef);
+      },
     });
 
     // selection events
@@ -862,7 +821,7 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // ✅ Keyboard controller (extracted)
+    // ✅ Keyboard controller (already extracted)
     const detachKeyboard = attachKeyboardController({
       canvas,
       isSpacePressedRef,
@@ -908,6 +867,7 @@ export default forwardRef<
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
 
+      detachMouse();
       detachKeyboard();
 
       if (autosaveTimerRef.current) {
