@@ -71,9 +71,15 @@ export function createGridController(args: Args) {
     const room = roomRef.current;
     if (!room) return;
 
-    canvas.sendObjectToBack(room as any);
     for (const l of lines) canvas.sendObjectToBack(l as any);
+
+    canvas.sendObjectToBack(room as any);
+
     for (const h of roomHandlesRef.current) canvas.bringObjectToFront(h as any);
+
+    canvas.getObjects().forEach((o: any) => {
+      if (o?.data?.kind === "opening") canvas.bringObjectToFront(o);
+    });
   };
 
   const clearLines = () => {

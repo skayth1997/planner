@@ -103,13 +103,16 @@ export default function HomePage() {
         <div>
           <h1 className="text-xl font-semibold text-neutral-900">Planner</h1>
           <p className="text-sm text-neutral-500">
-            Scroll = zoom • Hold <b>Space</b> = pan • Shift = step move • [ ] layers
+            Scroll = zoom • Hold <b>Space</b> = pan • Shift = step move • [ ]
+            layers
           </p>
         </div>
 
         {/* ROOM */}
         <div className="rounded-lg border border-neutral-200 bg-white p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">Room</div>
+          <div className="text-sm font-semibold text-neutral-700 mb-2">
+            Room
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs text-neutral-600">
@@ -137,7 +140,10 @@ export default function HomePage() {
             <button className={cls(btnBase, btnDark)} onClick={applyRoom}>
               Apply
             </button>
-            <button className={cls(btnBase, btnNeutral)} onClick={syncRoomFromCanvas}>
+            <button
+              className={cls(btnBase, btnNeutral)}
+              onClick={syncRoomFromCanvas}
+            >
               Read
             </button>
           </div>
@@ -229,6 +235,18 @@ export default function HomePage() {
           >
             Add Chair
           </button>
+          <button
+            className={cls(btnBase, btnPrimary, "w-full")}
+            onClick={() => canvasRef.current?.addWindow()}
+          >
+            Add Window
+          </button>
+          <button
+            className={cls(btnBase, btnPrimary, "w-full")}
+            onClick={() => canvasRef.current?.addDoor()}
+          >
+            Add door
+          </button>
         </div>
 
         {/* SELECTION */}
@@ -295,7 +313,12 @@ export default function HomePage() {
                 </button>
 
                 <button
-                  className={cls(btnBase, btnDanger, "ml-auto", !canEdit && btnDisabled)}
+                  className={cls(
+                    btnBase,
+                    btnDanger,
+                    "ml-auto",
+                    !canEdit && btnDisabled
+                  )}
                   disabled={!canEdit}
                   onClick={() => canvasRef.current?.deleteSelected()}
                 >
@@ -307,13 +330,17 @@ export default function HomePage() {
         </div>
 
         <div className="mt-auto text-xs text-neutral-500">
-          Pro tip: Ctrl/⌘+C/V copy/paste • Arrows nudge • Shift+Arrows grid step • Alt bypass clamp
+          Pro tip: Ctrl/⌘+C/V copy/paste • Arrows nudge • Shift+Arrows grid step
+          • Alt bypass clamp
         </div>
       </aside>
 
       <section className="p-4">
         <div className="w-full h-full">
-          <PlannerCanvas ref={canvasRef} onSelectionChange={onSelectionChange} />
+          <PlannerCanvas
+            ref={canvasRef}
+            onSelectionChange={onSelectionChange}
+          />
         </div>
       </section>
     </main>

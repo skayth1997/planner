@@ -1095,6 +1095,32 @@ export default forwardRef<
       setRoomSize(size: RoomSize) {
         setRoomSizeInternal(size);
       },
+
+      addDoor() {
+        const canvas = fabricCanvasRef.current;
+        const room = roomRef.current;
+        if (!canvas || !room) return;
+
+        const { addDoor } = require("./openings/openings");
+        addDoor(canvas, room as any);
+
+        gridRef.current?.restack();
+        pushHistoryNow();
+        safeRender();
+      },
+
+      addWindow() {
+        const canvas = fabricCanvasRef.current;
+        const room = roomRef.current;
+        if (!canvas || !room) return;
+
+        const { addWindow } = require("./openings/openings");
+        addWindow(canvas, room as any);
+
+        gridRef.current?.restack();
+        pushHistoryNow();
+        safeRender();
+      },
     }),
     []
   );

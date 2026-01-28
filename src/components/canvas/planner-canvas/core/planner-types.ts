@@ -44,6 +44,9 @@ export type PlannerCanvasHandle = {
 
   setGridVisible?: (visible: boolean) => void;
   setGridSize?: (size: number) => void;
+
+  addDoor: () => void;
+  addWindow: () => void;
 };
 
 export type FurnitureSnapshot = {
