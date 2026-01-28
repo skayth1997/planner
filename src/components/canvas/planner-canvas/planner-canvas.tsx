@@ -29,7 +29,6 @@ import type {
 import { isFurniture } from "./core/utils";
 
 import {
-  addFurniture as addFurnitureImpl,
   clampFurnitureInsideRoom,
   clampFurnitureInsideRoomPolygon,
   snapFurnitureToRoomGrid,
@@ -244,7 +243,6 @@ export default forwardRef<
     const handles = createCornerHandles(canvas, room);
     roomHandlesRef.current = handles;
 
-    // ✅ Grid controller
     const grid = createGridController({
       canvas,
       roomRef,
@@ -254,7 +252,6 @@ export default forwardRef<
     });
     gridRef.current = grid;
 
-    // ✅ Selection + hover controller
     const selection = createSelectionController({
       canvas,
       onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
@@ -264,7 +261,6 @@ export default forwardRef<
     selection.attach();
     selectionRef.current = selection;
 
-    // ✅ History controller
     const history = createHistoryController({
       canvas,
       storageKey: STORAGE_KEY,
@@ -276,7 +272,7 @@ export default forwardRef<
         ),
       onAfterRestore: () => {
         gridRef.current?.restack();
-        selectionRef.current?.restyleAllFurniture();
+        selectionRef.current?.restyleAll();
         clearGuides(canvas, guidesRef);
         updateOpeningsForRoomChange(canvas, room as any);
       },
@@ -292,7 +288,6 @@ export default forwardRef<
     });
     historyRef.current = history;
 
-    // ✅ Actions controller (all imperative object actions)
     actionsRef.current = createCanvasActions({
       getCanvas: () => fabricCanvasRef.current,
       getRoom: () => roomRef.current,
@@ -364,7 +359,6 @@ export default forwardRef<
     resizeCanvasToContainer();
     window.addEventListener("resize", resizeCanvasToContainer);
 
-    // ✅ Mouse controller
     const detachMouse = attachMouseController({
       canvas,
       isSpacePressedRef,
@@ -493,17 +487,15 @@ export default forwardRef<
 
       obj.setCoords();
       emitSelection();
-      selectionRef.current?.restyleAllFurniture();
+      selectionRef.current?.restyleAll();
       clearGuides(canvas, guidesRef);
 
       pushHistoryNow();
       scheduleRender();
     });
 
-    // ✅ Keyboard controller (wired to actions controller)
     const actions = actionsRef.current;
     if (!actions) {
-      // should never happen, but avoid crashing
       return () => {
         window.removeEventListener("resize", resizeCanvasToContainer);
         detachMouse();
@@ -573,8 +565,6 @@ export default forwardRef<
     ref,
     () => ({
       addFurniture(type: FurnitureType) {
-        // keep this local for now or delegate — either is fine
-        // delegate to actions to keep all actions centralized
         actionsRef.current?.addFurniture(type);
       },
 
@@ -622,7 +612,7 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllFurniture();
+        selectionRef.current?.restyleAll();
 
         const snap = layoutJson ?? serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
@@ -650,7 +640,7 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllFurniture();
+        selectionRef.current?.restyleAll();
 
         const snap = serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);

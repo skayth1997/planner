@@ -1,3 +1,4 @@
+import type React from "react";
 import type { Canvas, Polygon } from "fabric";
 import { Rect } from "fabric";
 
@@ -14,7 +15,6 @@ import {
 import {
   isOpening,
   snapOpeningToNearestWall,
-  updateOpeningsForRoomChange,
   addDoor,
   addWindow,
 } from "../openings/openings";
@@ -22,12 +22,10 @@ import {
 import { clearGuides } from "../selection/guides";
 import { fitRoomToView } from "../room/fit";
 
-import { serializeState } from "../history/history";
-
 type SelectionController = {
-  getSelectedFurnitureObjects: () => any[]; // keep name for compatibility
+  getSelectedObjects: () => any[];
   emitSelection: () => void;
-  restyleAllFurniture: () => void;
+  restyleAll: () => void;
 };
 
 type GridController = {
@@ -73,11 +71,10 @@ type Deps = {
 
 export function createCanvasActions(deps: Deps) {
   const emitSelection = () => deps.selection()?.emitSelection();
-  const restyleAll = () => deps.selection()?.restyleAllFurniture();
+  const restyleAll = () => deps.selection()?.restyleAll();
   const pushHistoryNow = () => deps.history()?.pushNow();
 
-  const getSelectedObjects = () =>
-    deps.selection()?.getSelectedFurnitureObjects() ?? [];
+  const getSelectedObjects = () => deps.selection()?.getSelectedObjects() ?? [];
 
   const deleteSelected = () => {
     const canvas = deps.getCanvas();
@@ -360,16 +357,12 @@ export function createCanvasActions(deps: Deps) {
   };
 
   const duplicateSelected = () => {
-    // easiest = reuse clipboard logic to keep 1 source of truth
+    // 1 source of truth
     cloneSelectedToClipboard();
     pasteFromClipboard();
   };
 
-  const setSelectedProps = (patch: {
-    width?: number;
-    height?: number;
-    angle?: number;
-  }) => {
+  const setSelectedProps = (patch: { width?: number; height?: number; angle?: number }) => {
     const canvas = deps.getCanvas();
     const room = deps.getRoom();
     if (!canvas || !room) return;
@@ -377,12 +370,14 @@ export function createCanvasActions(deps: Deps) {
     const active = canvas.getActiveObject() as any;
     if (!active) return;
 
+    // MVP: don't edit ActiveSelection from side panel
     if (Array.isArray(active?._objects)) return;
 
     const isF = isFurniture(active);
     const isO = isOpening(active);
     if (!isF && !isO) return;
 
+    // Apply width/height by scaling to match bounding rect size
     if (typeof patch.width === "number" && patch.width > 1) {
       const current = active.getBoundingRect(false, true).width;
       const factor = patch.width / Math.max(1, current);
@@ -464,9 +459,7 @@ export function createCanvasActions(deps: Deps) {
   const undo = () => deps.history()?.undo();
   const redo = () => deps.history()?.redo();
 
-  // Export actions API
   return {
-    // selection/object ops
     deleteSelected,
     duplicateSelected,
     copySelected: cloneSelectedToClipboard,
@@ -475,15 +468,12 @@ export function createCanvasActions(deps: Deps) {
     moveLayer,
     setSelectedProps,
 
-    // room/view ops
     fitRoom,
 
-    // add ops
     addFurniture: addFurnitureAction,
     addDoor: addDoorAction,
     addWindow: addWindowAction,
 
-    // history
     undo,
     redo,
   };

@@ -78,7 +78,7 @@ export function createSelectionController(args: Args) {
     onSelectionChange?.(getSelectedInfo(selected[0]));
   };
 
-  const restyleAllItems = () => {
+  const restyleAll = () => {
     const active = canvas.getActiveObject() as any;
 
     canvas.getObjects().forEach((o: any) => {
@@ -98,24 +98,23 @@ export function createSelectionController(args: Args) {
     scheduleRender();
   };
 
-  // ===== selection events =====
   const onSelectionCreated = () => {
     emitSelection();
-    restyleAllItems();
+    restyleAll();
     clearGuides?.();
     scheduleRender();
   };
 
   const onSelectionUpdated = () => {
     emitSelection();
-    restyleAllItems();
+    restyleAll();
     clearGuides?.();
     scheduleRender();
   };
 
   const onSelectionCleared = () => {
     onSelectionChange?.(null);
-    restyleAllItems();
+    restyleAll();
     clearGuides?.();
     scheduleRender();
   };
@@ -172,7 +171,7 @@ export function createSelectionController(args: Args) {
     attach,
     detach,
     emitSelection,
-    restyleAllFurniture: restyleAllItems,
-    getSelectedFurnitureObjects: () => getSelectedCanvasObjects(canvas),
+    restyleAll,
+    getSelectedObjects: () => getSelectedCanvasObjects(canvas),
   };
 }
