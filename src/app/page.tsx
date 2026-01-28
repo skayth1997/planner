@@ -6,6 +6,7 @@ import type {
   PlannerCanvasHandle,
   SelectedInfo,
 } from "@/components/canvas/planner-canvas/core/planner-types";
+import { GRID_SIZE } from "@/components/canvas/planner-canvas/core/planner-constants";
 
 function cls(...x: Array<string | false | undefined>) {
   return x.filter(Boolean).join(" ");
@@ -39,9 +40,11 @@ export default function HomePage() {
 
   const [importText, setImportText] = useState("");
 
-  // ROOM UI
   const [roomW, setRoomW] = useState<string>("600");
   const [roomH, setRoomH] = useState<string>("400");
+
+  const [gridVisible, setGridVisible] = useState(true);
+  const [gridSize, setGridSize] = useState<number>(GRID_SIZE);
 
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
@@ -104,7 +107,7 @@ export default function HomePage() {
           <h1 className="text-xl font-semibold text-neutral-900">Planner</h1>
           <p className="text-sm text-neutral-500">
             Scroll = zoom • Hold <b>Space</b> = pan • Shift = step move • [ ]
-            layers
+            layers • Hold Shift = free move
           </p>
         </div>
 
@@ -147,6 +150,45 @@ export default function HomePage() {
               Read
             </button>
           </div>
+        </div>
+
+        {/* GRID */}
+        <div className="rounded-lg border border-neutral-200 bg-white p-3">
+          <div className="text-sm font-semibold text-neutral-700 mb-2">
+            Grid
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-neutral-700">
+            <input
+              type="checkbox"
+              checked={gridVisible}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setGridVisible(v);
+                canvasRef.current?.setGridVisible(v);
+              }}
+            />
+            Show grid
+          </label>
+
+          <label className="text-xs text-neutral-600 mt-3 block">
+            Grid size
+            <select
+              className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
+              value={gridSize}
+              onChange={(e) => {
+                const size = Number(e.target.value);
+                setGridSize(size);
+                canvasRef.current?.setGridSize(size);
+              }}
+            >
+              {[10, 20, 25, 50, 100].map((s) => (
+                <option key={s} value={s}>
+                  {s}px
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {/* ACTIONS */}
