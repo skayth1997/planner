@@ -1,34 +1,46 @@
 import type { Canvas } from "fabric";
 
-type BoolRef = { current: boolean };
-
-type AttachKeyboardArgs = {
-  canvas: Canvas;
-  isSpacePressedRef: BoolRef;
-  isShiftPressedRef: BoolRef;
-  isAltPressedRef: BoolRef;
-  getGridSize: () => number;
-  actions: {
-    moveLayer: (dir: "up" | "down", toEdge: boolean) => void;
-    nudgeSelected: (dx: number, dy: number, skipClamp: boolean) => void;
-    copySelected: () => void;
-    paste: () => void;
-    undo: () => void;
-    redo: () => void;
-    deleteSelected: () => void;
-  };
+type Actions = {
+  moveLayer: (dir: "up" | "down", toEdge: boolean) => void;
+  nudgeSelected: (dx: number, dy: number, skipClamp?: boolean) => void;
+  copySelected: () => void;
+  paste: () => void;
+  undo: () => void;
+  redo: () => void;
+  deleteSelected: () => void;
 };
 
-function isTypingTarget(target: EventTarget | null) {
-  const tag = (target as HTMLElement | null)?.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA";
+type Args = {
+  canvas: Canvas;
+  isSpacePressedRef: React.MutableRefObject<boolean>;
+  isShiftPressedRef: React.MutableRefObject<boolean>;
+  isAltPressedRef: React.MutableRefObject<boolean>;
+  getGridSize: () => number;
+  actions: Actions;
+};
+
+function isEditableTarget(target: any) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+
+  const tag = (el.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+
+  // contenteditable (incl. tiptap etc.)
+  if ((el as any).isContentEditable) return true;
+
+  return false;
 }
 
-function isMac() {
-  return navigator.platform.toLowerCase().includes("mac");
+function isMacPlatform() {
+  // good enough for shortcuts behavior
+  return (
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/i.test(navigator.platform)
+  );
 }
 
-export function attachKeyboardController(args: AttachKeyboardArgs) {
+export function attachKeyboardController(args: Args) {
   const {
     canvas,
     isSpacePressedRef,
@@ -38,120 +50,141 @@ export function attachKeyboardController(args: AttachKeyboardArgs) {
     actions,
   } = args;
 
-  const resetModifiers = () => {
+  const isMac = isMacPlatform();
+
+  const clearMods = () => {
     isSpacePressedRef.current = false;
     isShiftPressedRef.current = false;
     isAltPressedRef.current = false;
-    canvas.defaultCursor = "default";
   };
 
-  const syncModifiers = (e: KeyboardEvent) => {
-    // ✅ Always sync modifiers from the event (reliable)
-    isShiftPressedRef.current = !!e.shiftKey;
-    isAltPressedRef.current = !!e.altKey;
+  const onWindowBlur = () => {
+    // important: prevents “stuck Space/Shift/Alt”
+    clearMods();
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
-    syncModifiers(e);
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (isEditableTarget(e.target)) return;
 
-    if (e.code === "Space") {
-      isSpacePressedRef.current = true;
-      canvas.defaultCursor = "grab";
-    }
+    // track modifier refs (global, consistent)
+    if (e.key === " " || e.code === "Space") isSpacePressedRef.current = true;
+    if (e.key === "Shift") isShiftPressedRef.current = true;
+    if (e.key === "Alt") isAltPressedRef.current = true;
 
-    const mod = isMac() ? e.metaKey : e.ctrlKey;
+    const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
+    const anyCtrlCmd = e.ctrlKey || e.metaKey; // allow both, feels nicer
 
-    // Layers: [ ] (Shift => to edge)
-    if (e.key === "[" || e.key === "]") {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
+    // ===== Shortcuts (Ctrl/⌘ behavior only) =====
+    if (anyCtrlCmd) {
+      const k = e.key.toLowerCase();
 
-      const toEdge = e.shiftKey;
-      if (e.key === "]") actions.moveLayer("up", toEdge);
-      if (e.key === "[") actions.moveLayer("down", toEdge);
+      // copy
+      if (k === "c") {
+        e.preventDefault();
+        actions.copySelected();
+        return;
+      }
+
+      // paste
+      if (k === "v") {
+        e.preventDefault();
+        actions.paste();
+        return;
+      }
+
+      // undo
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        actions.undo();
+        return;
+      }
+
+      // redo (⌘+Shift+Z on mac / ctrl+shift+z on win)
+      if (k === "z" && e.shiftKey) {
+        e.preventDefault();
+        actions.redo();
+        return;
+      }
+
+      // redo (ctrl+y on windows)
+      if (k === "y") {
+        e.preventDefault();
+        actions.redo();
+        return;
+      }
+
+      // let other ctrl/cmd combos pass through
       return;
     }
 
-    // Arrow nudge
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
-
-      const grid = getGridSize();
-      const step = e.shiftKey ? grid : 1;
-      const skipClamp = isAltPressedRef.current;
-
-      if (e.key === "ArrowLeft") actions.nudgeSelected(-step, 0, skipClamp);
-      if (e.key === "ArrowRight") actions.nudgeSelected(step, 0, skipClamp);
-      if (e.key === "ArrowUp") actions.nudgeSelected(0, -step, skipClamp);
-      if (e.key === "ArrowDown") actions.nudgeSelected(0, step, skipClamp);
-      return;
-    }
-
-    // Copy / paste
-    if (mod && e.key.toLowerCase() === "c") {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
-      actions.copySelected();
-      return;
-    }
-
-    if (mod && e.key.toLowerCase() === "v") {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
-      actions.paste();
-      return;
-    }
-
-    // Undo / redo
-    if (mod && e.key.toLowerCase() === "z") {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
-      if (e.shiftKey) actions.redo();
-      else actions.undo();
-      return;
-    }
-
-    if (mod && e.key.toLowerCase() === "y") {
-      if (isTypingTarget(e.target)) return;
-      e.preventDefault();
-      actions.redo();
-      return;
-    }
-
-    // Delete
-    if (e.key === "Delete" || e.key === "Backspace") {
-      if (isTypingTarget(e.target)) return;
+    // ===== Delete =====
+    if (e.key === "Backspace" || e.key === "Delete") {
       e.preventDefault();
       actions.deleteSelected();
       return;
     }
-  };
 
-  const handleKeyUp = (e: KeyboardEvent) => {
-    syncModifiers(e);
+    // ===== Layers ([ ]) =====
+    // ] => up, [ => down
+    if (e.code === "BracketRight" || e.key === "]") {
+      e.preventDefault();
+      const toEdge = e.shiftKey; // Shift+] => bring to front
+      actions.moveLayer("up", toEdge);
+      return;
+    }
 
-    if (e.code === "Space") {
-      isSpacePressedRef.current = false;
-      canvas.defaultCursor = "default";
+    if (e.code === "BracketLeft" || e.key === "[") {
+      e.preventDefault();
+      const toEdge = e.shiftKey; // Shift+[ => send to back
+      actions.moveLayer("down", toEdge);
+      return;
+    }
+
+    // ===== Nudging (arrows) =====
+    const isArrow =
+      e.key === "ArrowUp" ||
+      e.key === "ArrowDown" ||
+      e.key === "ArrowLeft" ||
+      e.key === "ArrowRight";
+
+    if (isArrow) {
+      e.preventDefault();
+
+      const step = e.shiftKey ? getGridSize() : 1;
+      const skipClamp = e.altKey; // Alt => bypass constraints
+
+      let dx = 0;
+      let dy = 0;
+
+      if (e.key === "ArrowUp") dy = -step;
+      if (e.key === "ArrowDown") dy = step;
+      if (e.key === "ArrowLeft") dx = -step;
+      if (e.key === "ArrowRight") dx = step;
+
+      actions.nudgeSelected(dx, dy, skipClamp);
+      return;
+    }
+
+    if (e.key === "Escape") {
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
     }
   };
 
-  const handleBlur = () => resetModifiers();
-
-  const handleVisibility = () => {
-    if (document.visibilityState !== "visible") resetModifiers();
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (e.key === " " || e.code === "Space") isSpacePressedRef.current = false;
+    if (e.key === "Shift") isShiftPressedRef.current = false;
+    if (e.key === "Alt") isAltPressedRef.current = false;
   };
 
-  window.addEventListener("keydown", handleKeyDown);
-  window.addEventListener("keyup", handleKeyUp);
-  window.addEventListener("blur", handleBlur);
-  document.addEventListener("visibilitychange", handleVisibility);
+  window.addEventListener("blur", onWindowBlur);
+  window.addEventListener("keydown", onKeyDown, { passive: false });
+  window.addEventListener("keyup", onKeyUp);
 
   return () => {
-    window.removeEventListener("keydown", handleKeyDown);
-    window.removeEventListener("keyup", handleKeyUp);
-    window.removeEventListener("blur", handleBlur);
-    document.removeEventListener("visibilitychange", handleVisibility);
+    window.removeEventListener("blur", onWindowBlur);
+    window.removeEventListener("keydown", onKeyDown as any);
+    window.removeEventListener("keyup", onKeyUp as any);
+    clearMods();
   };
 }

@@ -19,7 +19,7 @@ function isSelectableItem(obj: any) {
   return isFurniture(obj) || isOpening(obj);
 }
 
-function getSelectedCanvasObjects(canvas: Canvas): any[] {
+function getSelectedObjectsFromCanvas(canvas: Canvas): any[] {
   const active: any = canvas.getActiveObject();
   if (!active) return [];
 
@@ -48,17 +48,11 @@ function getBaseStyle(o: any) {
 }
 
 function setHoverEffect(o: any, on: boolean) {
-  // "Blur" effect via shadow
   o.set({
     shadow: on
-      ? {
-          color: "rgba(0,0,0,0.25)",
-          blur: 12,
-          offsetX: 0,
-          offsetY: 0,
-        }
+      ? { color: "rgba(0,0,0,0.25)", blur: 12, offsetX: 0, offsetY: 0 }
       : null,
-    objectCaching: false, // makes shadow updates reliable during hover/drag
+    objectCaching: false,
   });
 }
 
@@ -70,7 +64,7 @@ export function createSelectionController(args: Args) {
   const { canvas, onSelectionChange, scheduleRender, clearGuides } = args;
 
   const emitSelection = () => {
-    const selected = getSelectedCanvasObjects(canvas);
+    const selected = getSelectedObjectsFromCanvas(canvas);
     if (selected.length === 0) {
       onSelectionChange?.(null);
       return;
@@ -78,7 +72,7 @@ export function createSelectionController(args: Args) {
     onSelectionChange?.(getSelectedInfo(selected[0]));
   };
 
-  const restyleAll = () => {
+  const restyleAllItems = () => {
     const active = canvas.getActiveObject() as any;
 
     canvas.getObjects().forEach((o: any) => {
@@ -86,7 +80,7 @@ export function createSelectionController(args: Args) {
 
       const base = getBaseStyle(o);
 
-      if (active && o === active) {
+      if (active && (o === active || isActiveSelectionContains(active, o))) {
         o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
       } else {
         o.set({ stroke: base.stroke, strokeWidth: base.strokeWidth });
@@ -100,21 +94,21 @@ export function createSelectionController(args: Args) {
 
   const onSelectionCreated = () => {
     emitSelection();
-    restyleAll();
+    restyleAllItems();
     clearGuides?.();
     scheduleRender();
   };
 
   const onSelectionUpdated = () => {
     emitSelection();
-    restyleAll();
+    restyleAllItems();
     clearGuides?.();
     scheduleRender();
   };
 
   const onSelectionCleared = () => {
     onSelectionChange?.(null);
-    restyleAll();
+    restyleAllItems();
     clearGuides?.();
     scheduleRender();
   };
@@ -171,7 +165,7 @@ export function createSelectionController(args: Args) {
     attach,
     detach,
     emitSelection,
-    restyleAll,
-    getSelectedObjects: () => getSelectedCanvasObjects(canvas),
+    restyleAllItems,
+    getSelectedObjects: () => getSelectedObjectsFromCanvas(canvas),
   };
 }

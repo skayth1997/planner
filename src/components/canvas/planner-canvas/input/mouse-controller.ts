@@ -1,105 +1,126 @@
-// src/components/canvas/planner-canvas/mouse-controller.ts
+import { Point } from "fabric";
 import type { Canvas } from "fabric";
 
-type BoolRef = { current: boolean };
-
-type AttachMouseArgs = {
+type Args = {
   canvas: Canvas;
-
-  // key state (Space => pan)
-  isSpacePressedRef: BoolRef;
-
-  // zoom config
-  zoom: {
-    min: number;
-    max: number;
-    sensitivity: number;
-  };
-
-  // rendering
+  isSpacePressedRef: React.MutableRefObject<boolean>;
+  zoom: { min: number; max: number; sensitivity: number };
   scheduleRender: () => void;
-
-  // optional hooks
-  onPanStart?: () => void;
   onPanEnd?: () => void;
 };
 
-export function attachMouseController(args: AttachMouseArgs) {
-  const { canvas, isSpacePressedRef, zoom, scheduleRender, onPanStart, onPanEnd } =
-    args;
+export function attachMouseController(args: Args) {
+  const { canvas, isSpacePressedRef, zoom, scheduleRender, onPanEnd } = args;
 
-  // ===== Zoom (wheel) =====
-  const onWheel = (opt: any) => {
-    const event = opt.e as WheelEvent;
-
-    let z = canvas.getZoom();
-    z *= zoom.sensitivity ** event.deltaY;
-    z = Math.min(zoom.max, Math.max(zoom.min, z));
-
-    canvas.zoomToPoint({ x: event.offsetX, y: event.offsetY }, z);
-
-    event.preventDefault();
-    event.stopPropagation();
-    scheduleRender();
-  };
-
-  canvas.on("mouse:wheel", onWheel);
-
-  // ===== Pan (hold Space) =====
   let isPanning = false;
   let lastClientX = 0;
   let lastClientY = 0;
 
-  const onMouseDown = (opt: any) => {
-    if (!isSpacePressedRef.current) return;
-
-    const e = opt.e as MouseEvent;
+  const startPan = (e: any) => {
     isPanning = true;
+    lastClientX = e.clientX ?? 0;
+    lastClientY = e.clientY ?? 0;
 
-    // while panning we disable selection to avoid accidental marquee selection
+    // during pan, disable group selection box
     canvas.selection = false;
-    canvas.defaultCursor = "grabbing";
+    canvas.defaultCursor = "grab";
+    canvas.hoverCursor = "grab";
+  };
 
-    lastClientX = e.clientX;
-    lastClientY = e.clientY;
+  const endPan = () => {
+    if (!isPanning) return;
+    isPanning = false;
 
-    onPanStart?.();
+    canvas.selection = true;
+    canvas.defaultCursor = "default";
+    canvas.hoverCursor = "move";
+
+    onPanEnd?.();
+    scheduleRender();
+  };
+
+  const onMouseDown = (opt: any) => {
+    const e = opt.e as MouseEvent;
+
+    // Middle mouse can pan too (nice UX)
+    const isMiddle = (e.button ?? 0) === 1;
+
+    if (isSpacePressedRef.current || isMiddle) {
+      e.preventDefault();
+      startPan(e);
+    }
   };
 
   const onMouseMove = (opt: any) => {
     if (!isPanning) return;
 
     const e = opt.e as MouseEvent;
-    const vpt = canvas.viewportTransform!;
-    vpt[4] += e.clientX - lastClientX;
-    vpt[5] += e.clientY - lastClientY;
+    e.preventDefault();
 
-    lastClientX = e.clientX;
-    lastClientY = e.clientY;
+    const cx = e.clientX ?? 0;
+    const cy = e.clientY ?? 0;
 
+    const dx = cx - lastClientX;
+    const dy = cy - lastClientY;
+
+    lastClientX = cx;
+    lastClientY = cy;
+
+    canvas.relativePan(new Point(dx, dy));
     scheduleRender();
   };
 
   const onMouseUp = () => {
-    if (!isPanning) return;
+    endPan();
+  };
 
-    isPanning = false;
-    canvas.selection = true;
-    canvas.defaultCursor = "default";
+  const onMouseOut = () => {
+    // safety: end panning when pointer leaves canvas
+    endPan();
+  };
 
-    onPanEnd?.();
+  const onWheel = (opt: any) => {
+    const e = opt.e as WheelEvent;
+
+    // don’t zoom while actively panning
+    if (isPanning) return;
+
+    e.preventDefault();
+
+    const delta = e.deltaY;
+
+    let nextZoom = canvas.getZoom();
+    // sensitivity ~ 0.999, use exp-like curve
+    nextZoom *= Math.pow(zoom.sensitivity, delta);
+
+    nextZoom = Math.max(zoom.min, Math.min(zoom.max, nextZoom));
+
+    // zoom towards cursor
+    const pointer = canvas.getPointer(e as any);
+    canvas.zoomToPoint(new Point(pointer.x, pointer.y), nextZoom);
+
     scheduleRender();
   };
 
   canvas.on("mouse:down", onMouseDown);
   canvas.on("mouse:move", onMouseMove);
   canvas.on("mouse:up", onMouseUp);
+  canvas.on("mouse:out", onMouseOut);
+  canvas.on("mouse:wheel", onWheel);
 
-  // cleanup
+  // global safety (mouseup outside canvas)
+  const onWindowMouseUp = () => endPan();
+  window.addEventListener("mouseup", onWindowMouseUp);
+
   return () => {
-    canvas.off("mouse:wheel", onWheel);
+    window.removeEventListener("mouseup", onWindowMouseUp);
+
     canvas.off("mouse:down", onMouseDown);
     canvas.off("mouse:move", onMouseMove);
     canvas.off("mouse:up", onMouseUp);
+    canvas.off("mouse:out", onMouseOut);
+    canvas.off("mouse:wheel", onWheel);
+
+    endPan();
   };
 }

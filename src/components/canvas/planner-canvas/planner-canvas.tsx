@@ -126,9 +126,6 @@ export default forwardRef<
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
 
-  const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
-
-  // tiny helpers still used by Fabric event handlers
   const emitSelection = () => {
     selectionRef.current?.emitSelection();
   };
@@ -218,6 +215,18 @@ export default forwardRef<
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
 
+    canvas.on("object:added", (opt: any) => {
+      const o = opt?.target as any;
+      if (!o) return;
+
+      o.set({
+        cornerSize: 14,
+        padding: 6,
+        transparentCorners: false,
+        cornerStyle: "circle",
+      });
+    });
+
     // === Create room polygon + handles ===
     const room = createRoomPolygon(canvas);
     roomRef.current = room;
@@ -230,8 +239,7 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) =>
-                p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
@@ -272,17 +280,14 @@ export default forwardRef<
         ),
       onAfterRestore: () => {
         gridRef.current?.restack();
-        selectionRef.current?.restyleAll();
+        selectionRef.current?.restyleAllItems();
         clearGuides(canvas, guidesRef);
         updateOpeningsForRoomChange(canvas, room as any);
       },
       autosaveExtra: () => {
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
         } catch {}
       },
     });
@@ -335,10 +340,7 @@ export default forwardRef<
 
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
+          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
         } catch {}
       },
     });
@@ -367,7 +369,30 @@ export default forwardRef<
       onPanEnd: () => clearGuides(canvas, guidesRef),
     });
 
-    // transforms
+    // ===== Fabric transforms =====
+
+    // Snap object SIZE to grid on mouse-up (object:modified), not during drag.
+    const snapObjectSizeToGrid = (obj: any, gridSize: number) => {
+      if (!obj) return;
+
+      const scaledW =
+        obj.getScaledWidth?.() ?? obj.getBoundingRect(false, true).width;
+      const scaledH =
+        obj.getScaledHeight?.() ?? obj.getBoundingRect(false, true).height;
+
+      const targetW = Math.max(gridSize, Math.round(scaledW / gridSize) * gridSize);
+      const targetH = Math.max(gridSize, Math.round(scaledH / gridSize) * gridSize);
+
+      const baseW = Math.max(1, obj.width ?? 1);
+      const baseH = Math.max(1, obj.height ?? 1);
+
+      obj.scaleX = targetW / baseW;
+      obj.scaleY = targetH / baseH;
+
+      obj.setCoords();
+    };
+
+    // ✅ Smooth scaling while dragging (no snapping here)
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
 
@@ -376,39 +401,9 @@ export default forwardRef<
         return;
       }
 
-      // if Alt: free scale (no snapping)
-      if (isAltPressedRef.current) {
-        emitSelection();
-        safeRender();
-        return;
-      }
-
-      // only snap furniture scaling to grid
-      if (!isFurniture(obj)) {
-        emitSelection();
-        safeRender();
-        return;
-      }
-
-      const gridSize = getGridSize();
-
-      const rect = obj.getBoundingRect(false, true);
-      const targetW = Math.max(gridSize, snapToGrid(rect.width, gridSize));
-      const targetH = Math.max(gridSize, snapToGrid(rect.height, gridSize));
-
-      const baseW = Math.max(1, obj.width ?? 1);
-      const baseH = Math.max(1, obj.height ?? 1);
-
-      const nextScaleX = targetW / baseW;
-      const nextScaleY = targetH / baseH;
-
-      if (Number.isFinite(nextScaleX)) obj.scaleX = nextScaleX;
-      if (Number.isFinite(nextScaleY)) obj.scaleY = nextScaleY;
-
       obj.setCoords();
-
       emitSelection();
-      safeRender();
+      scheduleRender();
     });
 
     canvas.on("object:rotating", (opt) => {
@@ -436,6 +431,7 @@ export default forwardRef<
         return;
       }
 
+      // opening: always snap to nearest wall (you can decide to bypass with Alt later)
       if (isOpening(obj)) {
         snapOpeningToNearestWall(obj, room as any);
         obj.setCoords();
@@ -448,11 +444,15 @@ export default forwardRef<
 
       obj.setCoords();
 
-      clampFurnitureInsideRoomPolygon(obj, room as any);
-      clampFurnitureInsideRoom(obj, room as any);
+      if (!isAltPressedRef.current) {
+        clampFurnitureInsideRoomPolygon(obj, room as any);
+        clampFurnitureInsideRoom(obj, room as any);
+      }
 
       const shiftDown = isShiftPressedRef.current;
-      if (!shiftDown) {
+
+      // guides only when not Shift and not Alt
+      if (!shiftDown && !isAltPressedRef.current) {
         alignAndGuide(canvas, room as any, guidesRef, obj);
         obj.setCoords();
       } else {
@@ -480,14 +480,19 @@ export default forwardRef<
 
       const gridSize = getGridSize();
 
+      // ✅ snap SIZE to grid on mouse-up
+      snapObjectSizeToGrid(obj, gridSize);
+
+      // ✅ snap position to grid on mouse-up
       snapFurnitureToRoomGrid(obj, room as any, gridSize);
 
+      // ✅ clamp after modify
       clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
 
       obj.setCoords();
       emitSelection();
-      selectionRef.current?.restyleAll();
+      selectionRef.current?.restyleAllItems();
       clearGuides(canvas, guidesRef);
 
       pushHistoryNow();
@@ -524,7 +529,6 @@ export default forwardRef<
     });
 
     history.initFromStorage();
-
     scheduleRender();
 
     return () => {
@@ -612,7 +616,7 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAll();
+        selectionRef.current?.restyleAllItems();
 
         const snap = layoutJson ?? serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
@@ -640,7 +644,7 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAll();
+        selectionRef.current?.restyleAllItems();
 
         const snap = serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);

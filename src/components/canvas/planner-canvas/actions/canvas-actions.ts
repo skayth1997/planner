@@ -25,7 +25,9 @@ import { fitRoomToView } from "../room/fit";
 type SelectionController = {
   getSelectedObjects: () => any[];
   emitSelection: () => void;
-  restyleAll: () => void;
+  restyleAllItems: () => void;
+  restyleAllFurniture?: () => void;
+  getSelectedFurnitureObjects?: () => any[];
 };
 
 type GridController = {
@@ -44,37 +46,41 @@ type HistoryController = {
 };
 
 type Deps = {
-  // core refs/getters
   getCanvas: () => Canvas | null;
   getRoom: () => Polygon | null;
 
   getGridSize: () => number;
   safeRender: () => void;
 
-  // controllers
   selection: () => SelectionController | null;
   grid: () => GridController | null;
   history: () => HistoryController | null;
 
-  // selection output
   onSelectionChange: (info: any | null) => void;
 
-  // guides
   guidesRef: React.MutableRefObject<GuideLine[]>;
 
-  // clipboard
   clipboardRef: React.MutableRefObject<CanvasSnapshotItem[] | null>;
 
-  // nudge batching state
   scheduleNudgeCommit: () => void;
 };
 
 export function createCanvasActions(deps: Deps) {
   const emitSelection = () => deps.selection()?.emitSelection();
-  const restyleAll = () => deps.selection()?.restyleAll();
+
+  const restyleAll = () => {
+    const sel = deps.selection();
+    sel?.restyleAllItems?.() ?? sel?.restyleAllFurniture?.();
+  };
+
   const pushHistoryNow = () => deps.history()?.pushNow();
 
-  const getSelectedObjects = () => deps.selection()?.getSelectedObjects() ?? [];
+  const getSelectedObjects = () => {
+    const sel = deps.selection();
+    return (
+      sel?.getSelectedObjects?.() ?? sel?.getSelectedFurnitureObjects?.() ?? []
+    );
+  };
 
   const deleteSelected = () => {
     const canvas = deps.getCanvas();
@@ -156,7 +162,6 @@ export function createCanvasActions(deps: Deps) {
             } as any;
           }
 
-          // opening
           return {
             left: o.left ?? 0,
             top: o.top ?? 0,
@@ -193,7 +198,6 @@ export function createCanvasActions(deps: Deps) {
     const clones: Rect[] = [];
 
     for (const snap of snaps) {
-      // furniture
       if ((snap as any).data?.kind === "furniture") {
         const s: any = snap;
 
@@ -241,7 +245,6 @@ export function createCanvasActions(deps: Deps) {
         continue;
       }
 
-      // opening
       if ((snap as any).data?.kind === "opening") {
         const s: any = snap;
 
@@ -357,12 +360,15 @@ export function createCanvasActions(deps: Deps) {
   };
 
   const duplicateSelected = () => {
-    // 1 source of truth
     cloneSelectedToClipboard();
     pasteFromClipboard();
   };
 
-  const setSelectedProps = (patch: { width?: number; height?: number; angle?: number }) => {
+  const setSelectedProps = (patch: {
+    width?: number;
+    height?: number;
+    angle?: number;
+  }) => {
     const canvas = deps.getCanvas();
     const room = deps.getRoom();
     if (!canvas || !room) return;
