@@ -4,16 +4,10 @@ type BoolRef = { current: boolean };
 
 type AttachKeyboardArgs = {
   canvas: Canvas;
-
-  // key state refs (shared with mouse/pan etc.)
   isSpacePressedRef: BoolRef;
   isShiftPressedRef: BoolRef;
   isAltPressedRef: BoolRef;
-
-  // for arrow step
   getGridSize: () => number;
-
-  // actions implemented in planner-canvas.tsx
   actions: {
     moveLayer: (dir: "up" | "down", toEdge: boolean) => void;
     nudgeSelected: (dx: number, dy: number, skipClamp: boolean) => void;
@@ -44,14 +38,26 @@ export function attachKeyboardController(args: AttachKeyboardArgs) {
     actions,
   } = args;
 
+  const resetModifiers = () => {
+    isSpacePressedRef.current = false;
+    isShiftPressedRef.current = false;
+    isAltPressedRef.current = false;
+    canvas.defaultCursor = "default";
+  };
+
+  const syncModifiers = (e: KeyboardEvent) => {
+    // ✅ Always sync modifiers from the event (reliable)
+    isShiftPressedRef.current = !!e.shiftKey;
+    isAltPressedRef.current = !!e.altKey;
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
-    // modifier state
+    syncModifiers(e);
+
     if (e.code === "Space") {
       isSpacePressedRef.current = true;
       canvas.defaultCursor = "grab";
     }
-    if (e.key === "Shift") isShiftPressedRef.current = true;
-    if (e.key === "Alt") isAltPressedRef.current = true;
 
     const mod = isMac() ? e.metaKey : e.ctrlKey;
 
@@ -123,20 +129,29 @@ export function attachKeyboardController(args: AttachKeyboardArgs) {
   };
 
   const handleKeyUp = (e: KeyboardEvent) => {
+    syncModifiers(e);
+
     if (e.code === "Space") {
       isSpacePressedRef.current = false;
       canvas.defaultCursor = "default";
     }
-    if (e.key === "Shift") isShiftPressedRef.current = false;
-    if (e.key === "Alt") isAltPressedRef.current = false;
+  };
+
+  const handleBlur = () => resetModifiers();
+
+  const handleVisibility = () => {
+    if (document.visibilityState !== "visible") resetModifiers();
   };
 
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("keyup", handleKeyUp);
+  window.addEventListener("blur", handleBlur);
+  document.addEventListener("visibilitychange", handleVisibility);
 
-  // cleanup
   return () => {
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("keyup", handleKeyUp);
+    window.removeEventListener("blur", handleBlur);
+    document.removeEventListener("visibilitychange", handleVisibility);
   };
 }

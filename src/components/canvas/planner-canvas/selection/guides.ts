@@ -1,7 +1,7 @@
 import { Line } from "fabric";
 import type { Canvas, Rect } from "fabric";
 import type { GuideLine } from "../core/planner-types";
-import { isFurniture } from "../core/utils";
+import { isAlignable } from "../core/utils";
 import { ALIGN_SNAP_TOLERANCE } from "../core/planner-constants";
 
 type GuidePair = {
@@ -112,26 +112,60 @@ export function alignAndGuide(
 
   const all = canvas
     .getObjects()
-    .filter((o: any) => isFurniture(o) && o !== moving);
+    .filter((o: any) => isAlignable(o) && o !== moving);
 
   const mv = computeObjectAABB(moving);
 
-  const roomRect = room.getBoundingRect();
+  const roomRect = (room as any).getBoundingRect();
   const roomLeft = roomRect.left;
   const roomTop = roomRect.top;
   const roomRight = roomRect.left + roomRect.width;
   const roomBottom = roomRect.top + roomRect.height;
+
+  const roomCx = (roomLeft + roomRight) / 2;
+  const roomCy = (roomTop + roomBottom) / 2;
+
+  const roomTargetsX = [roomLeft, roomCx, roomRight];
+  const roomTargetsY = [roomTop, roomCy, roomBottom];
 
   let bestDx = 0;
   let bestDy = 0;
   let bestDxAbs = Number.POSITIVE_INFINITY;
   let bestDyAbs = Number.POSITIVE_INFINITY;
 
+  // Best guide candidates (object-object)
   let bestV: null | { x: number; y1: number; y2: number } = null;
   let bestH: null | { y: number; x1: number; x2: number } = null;
 
+  // Room guides ONLY (do not affect movement)
+  let roomBestDxAbs = Number.POSITIVE_INFINITY;
+  let roomBestDyAbs = Number.POSITIVE_INFINITY;
+  let roomBestV: null | { x: number; y1: number; y2: number } = null;
+  let roomBestH: null | { y: number; x1: number; x2: number } = null;
+
   const candidatesX = [mv.left, mv.cx, mv.right];
   const candidatesY = [mv.top, mv.cy, mv.bottom];
+
+  // ---- room guides only (NO moving.set here) ----
+  for (const cX of candidatesX) {
+    for (const tX of roomTargetsX) {
+      const s = snapValue(cX, tX, TOL);
+      if (s.snapped && Math.abs(s.delta) < roomBestDxAbs) {
+        roomBestDxAbs = Math.abs(s.delta);
+        roomBestV = { x: tX, y1: roomTop, y2: roomBottom };
+      }
+    }
+  }
+
+  for (const cY of candidatesY) {
+    for (const tY of roomTargetsY) {
+      const s = snapValue(cY, tY, TOL);
+      if (s.snapped && Math.abs(s.delta) < roomBestDyAbs) {
+        roomBestDyAbs = Math.abs(s.delta);
+        roomBestH = { y: tY, x1: roomLeft, x2: roomRight };
+      }
+    }
+  }
 
   for (const o of all) {
     const ob = computeObjectAABB(o);
@@ -168,12 +202,18 @@ export function alignAndGuide(
     }
   }
 
-  if (bestDxAbs !== Number.POSITIVE_INFINITY)
+  if (bestDxAbs !== Number.POSITIVE_INFINITY) {
     moving.set({ left: (moving.left ?? 0) + bestDx });
-  if (bestDyAbs !== Number.POSITIVE_INFINITY)
+  }
+  if (bestDyAbs !== Number.POSITIVE_INFINITY) {
     moving.set({ top: (moving.top ?? 0) + bestDy });
+  }
 
   moving.setCoords();
+
+  // If no object-object guide, fall back to room guides
+  if (!bestV && roomBestV) bestV = roomBestV;
+  if (!bestH && roomBestH) bestH = roomBestH;
 
   if (bestV) updateV(v, bestV.x, bestV.y1, bestV.y2);
   else hide(v);
@@ -181,6 +221,7 @@ export function alignAndGuide(
   if (bestH) updateH(h, bestH.y, bestH.x1, bestH.x2);
   else hide(h);
 
+  // keep on top
   canvas.bringObjectToFront(v);
   canvas.bringObjectToFront(h);
 }

@@ -9,7 +9,10 @@ export function isFurniture(obj: any): obj is Rect {
   return obj?.data?.kind === "furniture";
 }
 
-// ✅ NEW
+export function isAlignable(obj: any) {
+  return obj?.data?.kind === "furniture" || obj?.data?.kind === "opening";
+}
+
 export function isOpening(obj: any): obj is Rect {
   return obj?.data?.kind === "opening";
 }
@@ -22,7 +25,6 @@ export function getFurnitureType(obj: any): FurnitureType | "unknown" {
   return obj?.data?.type ?? "unknown";
 }
 
-// ✅ NEW
 export function getOpeningType(obj: any): OpeningType | "unknown" {
   return obj?.data?.type ?? "unknown";
 }

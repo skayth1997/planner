@@ -74,7 +74,7 @@ type HistoryController = ReturnType<typeof createHistoryController>;
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -150,54 +150,56 @@ export default forwardRef<
 
     clipboardRef.current = selected
       .filter((o) => isFurniture(o) || isOpening(o))
-      .map((o: any): CanvasSnapshotItem => {
-        // furniture
-        if (isFurniture(o)) {
+      .map(
+        (o: any): CanvasSnapshotItem => {
+          // furniture
+          if (isFurniture(o)) {
+            return {
+              left: o.left ?? 0,
+              top: o.top ?? 0,
+              width: o.width ?? 0,
+              height: o.height ?? 0,
+              angle: o.angle ?? 0,
+              rx: o.rx,
+              ry: o.ry,
+              fill: o.fill,
+              stroke: o.stroke,
+              strokeWidth: o.strokeWidth ?? 2,
+              scaleX: o.scaleX ?? 1,
+              scaleY: o.scaleY ?? 1,
+              data: {
+                kind: "furniture",
+                type: o.data?.type ?? "unknown",
+                id: o.data?.id ?? makeId(),
+                baseStroke: o.data?.baseStroke ?? "#10b981",
+                baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
+              },
+            };
+          }
+
+          // opening
           return {
             left: o.left ?? 0,
             top: o.top ?? 0,
             width: o.width ?? 0,
             height: o.height ?? 0,
             angle: o.angle ?? 0,
-            rx: o.rx,
-            ry: o.ry,
             fill: o.fill,
             stroke: o.stroke,
             strokeWidth: o.strokeWidth ?? 2,
             scaleX: o.scaleX ?? 1,
             scaleY: o.scaleY ?? 1,
             data: {
-              kind: "furniture",
-              type: o.data?.type ?? "unknown",
+              kind: "opening",
+              type: o.data?.type ?? "door",
               id: o.data?.id ?? makeId(),
-              baseStroke: o.data?.baseStroke ?? "#10b981",
-              baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
+              segIndex: Number(o.data?.segIndex) || 0,
+              t: typeof o.data?.t === "number" ? o.data.t : 0.5,
+              offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
             },
           };
         }
-
-        // opening
-        return {
-          left: o.left ?? 0,
-          top: o.top ?? 0,
-          width: o.width ?? 0,
-          height: o.height ?? 0,
-          angle: o.angle ?? 0,
-          fill: o.fill,
-          stroke: o.stroke,
-          strokeWidth: o.strokeWidth ?? 2,
-          scaleX: o.scaleX ?? 1,
-          scaleY: o.scaleY ?? 1,
-          data: {
-            kind: "opening",
-            type: o.data?.type ?? "door",
-            id: o.data?.id ?? makeId(),
-            segIndex: Number(o.data?.segIndex) || 0,
-            t: typeof o.data?.t === "number" ? o.data.t : 0.5,
-            offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
-          },
-        };
-      });
+      );
   };
 
   const pasteFromClipboard = () => {
@@ -514,7 +516,8 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) =>
+                p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
@@ -569,7 +572,10 @@ export default forwardRef<
         // keep room points saved together with item autosave
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -603,7 +609,10 @@ export default forwardRef<
 
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -680,7 +689,11 @@ export default forwardRef<
 
     canvas.on("object:rotating", (opt) => {
       const obj = opt.target as any;
-      if (obj && (isFurniture(obj) || isOpening(obj)) && isShiftPressedRef.current) {
+      if (
+        obj &&
+        (isFurniture(obj) || isOpening(obj)) &&
+        isShiftPressedRef.current
+      ) {
         const step = 15;
         const a = obj.angle ?? 0;
         obj.angle = Math.round(a / step) * step;
@@ -694,7 +707,11 @@ export default forwardRef<
       const obj = opt.target as any;
       if (!obj) return;
 
-      // openings snap to wall
+      if (obj.type === "activeSelection" || Array.isArray(obj?._objects)) {
+        clearGuides(canvas, guidesRef);
+        return;
+      }
+
       if (isOpening(obj)) {
         snapOpeningToNearestWall(obj, room as any);
         obj.setCoords();
@@ -710,7 +727,8 @@ export default forwardRef<
       clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
 
-      if (!isShiftPressedRef.current) {
+      const shiftDown = isShiftPressedRef.current;
+      if (!shiftDown) {
         alignAndGuide(canvas, room as any, guidesRef, obj);
         obj.setCoords();
       } else {
@@ -752,7 +770,6 @@ export default forwardRef<
       scheduleRender();
     });
 
-    // ✅ Keyboard controller
     const detachKeyboard = attachKeyboardController({
       canvas,
       isSpacePressedRef,
@@ -770,7 +787,6 @@ export default forwardRef<
       },
     });
 
-    // ✅ history init (autoload if exists)
     history.initFromStorage();
 
     scheduleRender();
@@ -858,7 +874,8 @@ export default forwardRef<
               hoverCursor: "move",
             });
 
-            if (active.rx && active.ry) rect.set({ rx: active.rx, ry: active.ry });
+            if (active.rx && active.ry)
+              rect.set({ rx: active.rx, ry: active.ry });
 
             rect.scaleX = active.scaleX ?? 1;
             rect.scaleY = active.scaleY ?? 1;
@@ -913,7 +930,10 @@ export default forwardRef<
               id: makeId(),
               segIndex: Number(active.data?.segIndex) || 0,
               t: typeof active.data?.t === "number" ? active.data.t : 0.5,
-              offset: typeof active.data?.offset === "number" ? active.data.offset : 0,
+              offset:
+                typeof active.data?.offset === "number"
+                  ? active.data.offset
+                  : 0,
             };
 
             canvas.add(rect);
@@ -931,7 +951,8 @@ export default forwardRef<
         } else {
           const anyCanvas: any = canvas as any;
           const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
+            anyCanvas?.ActiveSelection ||
+            (window as any)?.fabric?.ActiveSelection;
           if (ActiveSelectionCtor) {
             const sel = new ActiveSelectionCtor(clones, { canvas });
             canvas.setActiveObject(sel);
