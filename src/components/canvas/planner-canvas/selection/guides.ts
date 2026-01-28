@@ -107,6 +107,9 @@ export function alignAndGuide(
 ) {
   const { v, h } = ensureGuidePair(canvas, guidesRef);
 
+  const zoom = canvas.getZoom() || 1;
+  const TOL = ALIGN_SNAP_TOLERANCE / zoom;
+
   const all = canvas
     .getObjects()
     .filter((o: any) => isFurniture(o) && o !== moving);
@@ -124,7 +127,6 @@ export function alignAndGuide(
   let bestDxAbs = Number.POSITIVE_INFINITY;
   let bestDyAbs = Number.POSITIVE_INFINITY;
 
-  // Best guide candidates
   let bestV: null | { x: number; y1: number; y2: number } = null;
   let bestH: null | { y: number; x1: number; x2: number } = null;
 
@@ -139,7 +141,7 @@ export function alignAndGuide(
 
     for (const cX of candidatesX) {
       for (const tX of targetsX) {
-        const s = snapValue(cX, tX, ALIGN_SNAP_TOLERANCE);
+        const s = snapValue(cX, tX, TOL);
         if (s.snapped && Math.abs(s.delta) < bestDxAbs) {
           bestDxAbs = Math.abs(s.delta);
           bestDx = s.delta;
@@ -153,7 +155,7 @@ export function alignAndGuide(
 
     for (const cY of candidatesY) {
       for (const tY of targetsY) {
-        const s = snapValue(cY, tY, ALIGN_SNAP_TOLERANCE);
+        const s = snapValue(cY, tY, TOL);
         if (s.snapped && Math.abs(s.delta) < bestDyAbs) {
           bestDyAbs = Math.abs(s.delta);
           bestDy = s.delta;
@@ -166,21 +168,19 @@ export function alignAndGuide(
     }
   }
 
-  if (bestDxAbs !== Number.POSITIVE_INFINITY) {
+  if (bestDxAbs !== Number.POSITIVE_INFINITY)
     moving.set({ left: (moving.left ?? 0) + bestDx });
-  }
-  if (bestDyAbs !== Number.POSITIVE_INFINITY) {
+  if (bestDyAbs !== Number.POSITIVE_INFINITY)
     moving.set({ top: (moving.top ?? 0) + bestDy });
-  }
 
-  // Update persistent lines
+  moving.setCoords();
+
   if (bestV) updateV(v, bestV.x, bestV.y1, bestV.y2);
   else hide(v);
 
   if (bestH) updateH(h, bestH.y, bestH.x1, bestH.x2);
   else hide(h);
 
-  // Keep on top (in case new objects got added)
   canvas.bringObjectToFront(v);
   canvas.bringObjectToFront(h);
 }

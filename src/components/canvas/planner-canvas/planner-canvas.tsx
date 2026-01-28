@@ -712,6 +712,7 @@ export default forwardRef<
 
       if (!isShiftPressedRef.current) {
         alignAndGuide(canvas, room as any, guidesRef, obj);
+        obj.setCoords();
       } else {
         clearGuides(canvas, guidesRef);
       }
