@@ -311,7 +311,7 @@ export default function HomePage() {
             className={cls(btnBase, btnPrimary, "w-full")}
             onClick={() => canvasRef.current?.addDoor()}
           >
-            Add door
+            Add Door
           </button>
         </div>
 
@@ -401,7 +401,7 @@ export default function HomePage() {
         </div>
       </aside>
 
-      <section className="p-4">
+      <section className="p-4 bg-white">
         <div className="w-full h-full">
           <PlannerCanvas
             ref={canvasRef}

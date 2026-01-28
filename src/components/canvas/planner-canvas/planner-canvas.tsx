@@ -1,4 +1,3 @@
-// src/components/canvas/planner-canvas/planner-canvas.tsx
 "use client";
 
 import React, {
@@ -7,7 +6,7 @@ import React, {
   useImperativeHandle,
   useRef,
 } from "react";
-import { Canvas, Rect, Polygon, Circle } from "fabric";
+import { Canvas, Polygon, Circle } from "fabric";
 
 import {
   GRID_SIZE,
@@ -27,16 +26,19 @@ import type {
   CanvasSnapshotItem,
 } from "./core/planner-types";
 
-import { isFurniture, getSelectedInfo, makeId } from "./core/utils";
+import { isFurniture } from "./core/utils";
+
 import {
-  addFurniture,
+  addFurniture as addFurnitureImpl,
   clampFurnitureInsideRoom,
   clampFurnitureInsideRoomPolygon,
   snapFurnitureToRoomGrid,
 } from "./furniture/furniture";
+
 import { fitRoomToView } from "./room/fit";
 import { alignAndGuide, clearGuides } from "./selection/guides";
 import { serializeState, restoreFromJson } from "./history/history";
+
 import {
   saveNow,
   loadNow,
@@ -66,6 +68,8 @@ import { attachMouseController } from "./input/mouse-controller";
 import { createSelectionController } from "./selection/selection-controller";
 import { createGridController } from "./grid/grid-controller";
 import { createHistoryController } from "./history/history-controller";
+
+import { createCanvasActions } from "./actions/canvas-actions";
 
 type SelectionController = ReturnType<typeof createSelectionController>;
 type GridController = ReturnType<typeof createGridController>;
@@ -106,8 +110,13 @@ export default forwardRef<
   // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
-  // clipboard (now supports furniture + openings)
+  // clipboard (supports furniture + openings)
   const clipboardRef = useRef<CanvasSnapshotItem[] | null>(null);
+
+  // actions controller
+  const actionsRef = useRef<ReturnType<typeof createCanvasActions> | null>(
+    null
+  );
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -120,225 +129,13 @@ export default forwardRef<
 
   const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
-  const getSelectedFurnitureObjects = (): any[] => {
-    // name kept for compatibility; selection controller now returns furniture + openings
-    return selectionRef.current?.getSelectedFurnitureObjects() ?? [];
-  };
-
+  // tiny helpers still used by Fabric event handlers
   const emitSelection = () => {
     selectionRef.current?.emitSelection();
   };
 
   const pushHistoryNow = () => {
     historyRef.current?.pushNow();
-  };
-
-  const undoInternal = () => {
-    historyRef.current?.undo();
-  };
-
-  const redoInternal = () => {
-    historyRef.current?.redo();
-  };
-
-  const cloneSelectedToClipboard = () => {
-    const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    const selected = getSelectedFurnitureObjects();
-    if (selected.length === 0) return;
-
-    clipboardRef.current = selected
-      .filter((o) => isFurniture(o) || isOpening(o))
-      .map(
-        (o: any): CanvasSnapshotItem => {
-          // furniture
-          if (isFurniture(o)) {
-            return {
-              left: o.left ?? 0,
-              top: o.top ?? 0,
-              width: o.width ?? 0,
-              height: o.height ?? 0,
-              angle: o.angle ?? 0,
-              rx: o.rx,
-              ry: o.ry,
-              fill: o.fill,
-              stroke: o.stroke,
-              strokeWidth: o.strokeWidth ?? 2,
-              scaleX: o.scaleX ?? 1,
-              scaleY: o.scaleY ?? 1,
-              data: {
-                kind: "furniture",
-                type: o.data?.type ?? "unknown",
-                id: o.data?.id ?? makeId(),
-                baseStroke: o.data?.baseStroke ?? "#10b981",
-                baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
-              },
-            };
-          }
-
-          // opening
-          return {
-            left: o.left ?? 0,
-            top: o.top ?? 0,
-            width: o.width ?? 0,
-            height: o.height ?? 0,
-            angle: o.angle ?? 0,
-            fill: o.fill,
-            stroke: o.stroke,
-            strokeWidth: o.strokeWidth ?? 2,
-            scaleX: o.scaleX ?? 1,
-            scaleY: o.scaleY ?? 1,
-            data: {
-              kind: "opening",
-              type: o.data?.type ?? "door",
-              id: o.data?.id ?? makeId(),
-              segIndex: Number(o.data?.segIndex) || 0,
-              t: typeof o.data?.t === "number" ? o.data.t : 0.5,
-              offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
-            },
-          };
-        }
-      );
-  };
-
-  const pasteFromClipboard = () => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-
-    const snaps = clipboardRef.current;
-    if (!snaps || snaps.length === 0) return;
-
-    const grid = getGridSize();
-    const clones: Rect[] = [];
-
-    for (const snap of snaps) {
-      // furniture
-      if ((snap as any).data?.kind === "furniture") {
-        const s: any = snap;
-
-        const rect = new Rect({
-          left: (s.left ?? 0) + grid,
-          top: (s.top ?? 0) + grid,
-          width: s.width ?? 60,
-          height: s.height ?? 60,
-          fill: s.fill ?? "rgba(16,185,129,0.25)",
-          stroke: s.stroke ?? "#10b981",
-          strokeWidth: s.strokeWidth ?? 2,
-          selectable: true,
-          evented: true,
-          hasControls: true,
-          hasBorders: true,
-          lockScalingFlip: true,
-          transparentCorners: false,
-          angle: s.angle ?? 0,
-          hoverCursor: "move",
-        });
-
-        if (typeof s.rx === "number" && typeof s.ry === "number") {
-          rect.set({ rx: s.rx, ry: s.ry });
-        }
-
-        rect.scaleX = s.scaleX ?? 1;
-        rect.scaleY = s.scaleY ?? 1;
-
-        (rect as any).data = {
-          kind: "furniture",
-          type: s.data?.type ?? "unknown",
-          id: makeId(),
-          baseStroke: s.data?.baseStroke ?? "#10b981",
-          baseStrokeWidth: s.data?.baseStrokeWidth ?? 2,
-        };
-
-        canvas.add(rect);
-
-        clampFurnitureInsideRoomPolygon(rect as any, room as any);
-        clampFurnitureInsideRoom(rect as any, room as any);
-        snapFurnitureToRoomGrid(rect as any, room as any, grid);
-
-        rect.setCoords();
-        clones.push(rect);
-        continue;
-      }
-
-      // opening
-      if ((snap as any).data?.kind === "opening") {
-        const s: any = snap;
-
-        const rect = new Rect({
-          left: (s.left ?? 0) + grid,
-          top: (s.top ?? 0) + grid,
-          width: s.width ?? 80,
-          height: s.height ?? 10,
-          fill:
-            s.fill ??
-            (s.data?.type === "window"
-              ? "rgba(59,130,246,0.18)"
-              : "rgba(245,158,11,0.25)"),
-          stroke:
-            s.stroke ?? (s.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
-          strokeWidth: s.strokeWidth ?? 2,
-          selectable: true,
-          evented: true,
-          hasControls: true,
-          hasBorders: true,
-          lockScalingFlip: true,
-          transparentCorners: false,
-          angle: s.angle ?? 0,
-          hoverCursor: "move",
-          originX: "center",
-          originY: "center",
-        });
-
-        rect.scaleX = s.scaleX ?? 1;
-        rect.scaleY = s.scaleY ?? 1;
-
-        (rect as any).data = {
-          kind: "opening",
-          type: s.data?.type ?? "door",
-          id: makeId(),
-          segIndex: Number(s.data?.segIndex) || 0,
-          t: typeof s.data?.t === "number" ? s.data.t : 0.5,
-          offset: typeof s.data?.offset === "number" ? s.data.offset : 0,
-          baseStroke:
-            s.data?.baseStroke ??
-            (s.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
-          baseStrokeWidth: s.data?.baseStrokeWidth ?? 2,
-        };
-
-        canvas.add(rect);
-
-        snapOpeningToNearestWall(rect as any, room as any);
-
-        rect.setCoords();
-        clones.push(rect);
-        continue;
-      }
-    }
-
-    // set active selection
-    canvas.discardActiveObject();
-    if (clones.length === 1) {
-      canvas.setActiveObject(clones[0]);
-    } else if (clones.length > 1) {
-      const anyCanvas: any = canvas as any;
-      const ActiveSelectionCtor =
-        anyCanvas?.ActiveSelection || (window as any)?.fabric?.ActiveSelection;
-      if (ActiveSelectionCtor) {
-        const sel = new ActiveSelectionCtor(clones, { canvas });
-        canvas.setActiveObject(sel);
-      } else {
-        canvas.setActiveObject(clones[0]);
-      }
-    }
-
-    emitSelection();
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-
-    pushHistoryNow();
-    safeRender();
   };
 
   const scheduleNudgeCommit = () => {
@@ -352,91 +149,6 @@ export default forwardRef<
       nudgeDirtyRef.current = false;
       pushHistoryNow();
     }, 220);
-  };
-
-  const nudgeSelected = (dx: number, dy: number, skipClamp = false) => {
-    const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
-    if (!canvas || !room) return;
-
-    const selected = getSelectedFurnitureObjects();
-    if (selected.length === 0) return;
-
-    for (const o of selected) {
-      o.set({
-        left: (o.left ?? 0) + dx,
-        top: (o.top ?? 0) + dy,
-      });
-      o.setCoords();
-      if (!skipClamp && isFurniture(o)) {
-        clampFurnitureInsideRoomPolygon(o, room as any);
-        clampFurnitureInsideRoom(o, room as any);
-      }
-      if (!skipClamp && isOpening(o)) {
-        snapOpeningToNearestWall(o, room as any);
-      }
-      o.setCoords();
-    }
-
-    const active: any = canvas.getActiveObject();
-    if (active && Array.isArray(active?._objects)) {
-      active.setCoords?.();
-    }
-
-    emitSelection();
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-    safeRender();
-
-    scheduleNudgeCommit();
-  };
-
-  const moveLayer = (dir: "up" | "down", toEdge: boolean) => {
-    const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    const selected = getSelectedFurnitureObjects();
-    if (selected.length === 0) return;
-
-    const objs = dir === "up" ? [...selected] : [...selected].reverse();
-
-    for (const o of objs) {
-      if (toEdge) {
-        if (dir === "up") canvas.bringObjectToFront(o);
-        else canvas.sendObjectToBack(o);
-      } else {
-        if (dir === "up") canvas.bringObjectForward(o);
-        else canvas.sendObjectBackwards(o);
-      }
-    }
-
-    // ensure room/grid/handles correct
-    gridRef.current?.restack();
-
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-    safeRender();
-
-    pushHistoryNow();
-  };
-
-  const deleteSelectedInternal = () => {
-    const canvas = fabricCanvasRef.current;
-    if (!canvas) return;
-
-    const selected = getSelectedFurnitureObjects();
-    if (selected.length === 0) return;
-
-    for (const o of selected) canvas.remove(o);
-
-    canvas.discardActiveObject();
-    onSelectionChangeRef.current?.(null);
-
-    selectionRef.current?.restyleAllFurniture();
-    clearGuides(canvas, guidesRef);
-
-    pushHistoryNow();
-    safeRender();
   };
 
   // ===== Room API (bbox) =====
@@ -524,9 +236,7 @@ export default forwardRef<
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
-          if (pts.length >= 3) {
-            setRoomPoints(room, pts);
-          }
+          if (pts.length >= 3) setRoomPoints(room, pts);
         }
       } catch {}
     }
@@ -565,14 +275,12 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         ),
       onAfterRestore: () => {
-        // keep stack order + UI consistent after restore
         gridRef.current?.restack();
         selectionRef.current?.restyleAllFurniture();
         clearGuides(canvas, guidesRef);
         updateOpeningsForRoomChange(canvas, room as any);
       },
       autosaveExtra: () => {
-        // keep room points saved together with item autosave
         try {
           const pts = getRoomPoints(room);
           localStorage.setItem(
@@ -583,6 +291,26 @@ export default forwardRef<
       },
     });
     historyRef.current = history;
+
+    // ✅ Actions controller (all imperative object actions)
+    actionsRef.current = createCanvasActions({
+      getCanvas: () => fabricCanvasRef.current,
+      getRoom: () => roomRef.current,
+
+      getGridSize: () => getGridSize(),
+      safeRender,
+
+      selection: () => selectionRef.current as any,
+      grid: () => gridRef.current as any,
+      history: () => historyRef.current as any,
+
+      onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
+
+      guidesRef,
+      clipboardRef,
+
+      scheduleNudgeCommit,
+    });
 
     attachWallEditing({
       canvas,
@@ -649,7 +377,6 @@ export default forwardRef<
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
 
-      // openings scaling is allowed (Fabric will handle) — we just keep selection updated
       if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
         emitSelection();
         return;
@@ -773,6 +500,20 @@ export default forwardRef<
       scheduleRender();
     });
 
+    // ✅ Keyboard controller (wired to actions controller)
+    const actions = actionsRef.current;
+    if (!actions) {
+      // should never happen, but avoid crashing
+      return () => {
+        window.removeEventListener("resize", resizeCanvasToContainer);
+        detachMouse();
+        selection.detach();
+        grid.dispose();
+        history.dispose();
+        canvas.dispose();
+      };
+    }
+
     const detachKeyboard = attachKeyboardController({
       canvas,
       isSpacePressedRef,
@@ -780,13 +521,13 @@ export default forwardRef<
       isAltPressedRef,
       getGridSize: () => getGridSize(),
       actions: {
-        moveLayer,
-        nudgeSelected,
-        copySelected: cloneSelectedToClipboard,
-        paste: pasteFromClipboard,
-        undo: undoInternal,
-        redo: redoInternal,
-        deleteSelected: deleteSelectedInternal,
+        moveLayer: actions.moveLayer,
+        nudgeSelected: actions.nudgeSelected,
+        copySelected: actions.copySelected,
+        paste: actions.paste,
+        undo: actions.undo,
+        redo: actions.redo,
+        deleteSelected: actions.deleteSelected,
       },
     });
 
@@ -824,6 +565,7 @@ export default forwardRef<
       fabricCanvasRef.current = null;
       roomRef.current = null;
       scheduleRenderRef.current = null;
+      actionsRef.current = null;
     };
   }, []);
 
@@ -831,224 +573,33 @@ export default forwardRef<
     ref,
     () => ({
       addFurniture(type: FurnitureType) {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        addFurniture(canvas, room as any, type);
-
-        selectionRef.current?.restyleAllFurniture();
-        pushHistoryNow();
+        // keep this local for now or delegate — either is fine
+        // delegate to actions to keep all actions centralized
+        actionsRef.current?.addFurniture(type);
       },
 
       deleteSelected() {
-        deleteSelectedInternal();
+        actionsRef.current?.deleteSelected();
       },
 
       duplicateSelected() {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        const selected = getSelectedFurnitureObjects();
-        if (selected.length === 0) return;
-
-        const grid = getGridSize();
-        const clones: Rect[] = [];
-
-        for (const active of selected as any[]) {
-          // ===== furniture =====
-          if (isFurniture(active)) {
-            const rect = new Rect({
-              left: (active.left ?? 0) + grid,
-              top: (active.top ?? 0) + grid,
-              width: active.width,
-              height: active.height,
-              fill: active.fill,
-              stroke: active.stroke,
-              strokeWidth: active.strokeWidth,
-              selectable: true,
-              evented: true,
-              hasControls: true,
-              hasBorders: true,
-              lockScalingFlip: true,
-              transparentCorners: false,
-              angle: active.angle ?? 0,
-              hoverCursor: "move",
-            });
-
-            if (active.rx && active.ry)
-              rect.set({ rx: active.rx, ry: active.ry });
-
-            rect.scaleX = active.scaleX ?? 1;
-            rect.scaleY = active.scaleY ?? 1;
-
-            (rect as any).data = {
-              kind: "furniture",
-              type: active.data?.type ?? "unknown",
-              id: makeId(),
-              baseStroke: active.data?.baseStroke ?? "#10b981",
-              baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
-            };
-
-            canvas.add(rect);
-
-            clampFurnitureInsideRoomPolygon(rect as any, room as any);
-            clampFurnitureInsideRoom(rect as any, room as any);
-            snapFurnitureToRoomGrid(rect as any, room as any, grid);
-
-            rect.setCoords();
-            clones.push(rect);
-            continue;
-          }
-
-          // ===== opening =====
-          if (isOpening(active)) {
-            const rect = new Rect({
-              left: (active.left ?? 0) + grid,
-              top: (active.top ?? 0) + grid,
-              width: active.width ?? 80,
-              height: active.height ?? 10,
-              fill: active.fill,
-              stroke: active.stroke,
-              strokeWidth: active.strokeWidth ?? 2,
-              selectable: true,
-              evented: true,
-              hasControls: true,
-              hasBorders: true,
-              lockScalingFlip: true,
-              transparentCorners: false,
-              angle: active.angle ?? 0,
-              hoverCursor: "move",
-              originX: "center",
-              originY: "center",
-            });
-
-            rect.scaleX = active.scaleX ?? 1;
-            rect.scaleY = active.scaleY ?? 1;
-
-            (rect as any).data = {
-              kind: "opening",
-              type: active.data?.type ?? "door",
-              id: makeId(),
-              segIndex: Number(active.data?.segIndex) || 0,
-              t: typeof active.data?.t === "number" ? active.data.t : 0.5,
-              offset:
-                typeof active.data?.offset === "number"
-                  ? active.data.offset
-                  : 0,
-              baseStroke:
-                active.data?.baseStroke ??
-                ((active.data?.type ?? "door") === "window"
-                  ? "#3b82f6"
-                  : "#f59e0b"),
-              baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
-            };
-
-            canvas.add(rect);
-
-            snapOpeningToNearestWall(rect as any, room as any);
-
-            rect.setCoords();
-            clones.push(rect);
-          }
-        }
-
-        canvas.discardActiveObject();
-        if (clones.length === 1) {
-          canvas.setActiveObject(clones[0]);
-        } else {
-          const anyCanvas: any = canvas as any;
-          const ActiveSelectionCtor =
-            anyCanvas?.ActiveSelection ||
-            (window as any)?.fabric?.ActiveSelection;
-          if (ActiveSelectionCtor) {
-            const sel = new ActiveSelectionCtor(clones, { canvas });
-            canvas.setActiveObject(sel);
-          } else {
-            canvas.setActiveObject(clones[0]);
-          }
-        }
-
-        emitSelection();
-        selectionRef.current?.restyleAllFurniture();
-        clearGuides(canvas, guidesRef);
-
-        pushHistoryNow();
-        safeRender();
+        actionsRef.current?.duplicateSelected();
       },
 
       setSelectedProps(patch) {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        const active = canvas.getActiveObject() as any;
-        if (!active) return;
-
-        // Do not support editing ActiveSelection from side panel (MVP)
-        if (Array.isArray(active?._objects)) return;
-
-        const isF = isFurniture(active);
-        const isO = isOpening(active);
-
-        if (!isF && !isO) return;
-
-        // Apply width/height by scaling to match bounding rect size
-        if (typeof patch.width === "number" && patch.width > 1) {
-          const current = active.getBoundingRect(false, true).width;
-          const factor = patch.width / Math.max(1, current);
-          active.scaleX = (active.scaleX ?? 1) * factor;
-        }
-
-        if (typeof patch.height === "number" && patch.height > 1) {
-          const current = active.getBoundingRect(false, true).height;
-          const factor = patch.height / Math.max(1, current);
-          active.scaleY = (active.scaleY ?? 1) * factor;
-        }
-
-        if (typeof patch.angle === "number") active.angle = patch.angle;
-
-        active.setCoords();
-
-        // Constraints
-        if (isF) {
-          clampFurnitureInsideRoomPolygon(active, room as any);
-          clampFurnitureInsideRoom(active, room as any);
-
-          snapFurnitureToRoomGrid(active, room as any, getGridSize());
-        }
-
-        if (isO) {
-          snapOpeningToNearestWall(active, room as any);
-        }
-
-        active.setCoords();
-
-        selectionRef.current?.restyleAllFurniture();
-        clearGuides(canvas, guidesRef);
-
-        onSelectionChangeRef.current?.(getSelectedInfo(active));
-        pushHistoryNow();
-        safeRender();
+        actionsRef.current?.setSelectedProps(patch);
       },
 
       fitRoom() {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        fitRoomToView(canvas, room);
-        clearGuides(canvas, guidesRef);
-        safeRender();
+        actionsRef.current?.fitRoom();
       },
 
       undo() {
-        undoInternal();
+        actionsRef.current?.undo();
       },
 
       redo() {
-        redoInternal();
+        actionsRef.current?.redo();
       },
 
       save() {
@@ -1073,7 +624,6 @@ export default forwardRef<
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
-        // reset undo stack to loaded snapshot
         const snap = layoutJson ?? serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
 
@@ -1102,7 +652,6 @@ export default forwardRef<
         updateOpeningsForRoomChange(canvas, room as any);
         selectionRef.current?.restyleAllFurniture();
 
-        // reset undo stack to imported snapshot
         const snap = serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
 
@@ -1127,29 +676,11 @@ export default forwardRef<
       },
 
       addDoor() {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        const { addDoor } = require("./openings/openings");
-        addDoor(canvas, room as any);
-
-        gridRef.current?.restack();
-        pushHistoryNow();
-        safeRender();
+        actionsRef.current?.addDoor();
       },
 
       addWindow() {
-        const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
-        if (!canvas || !room) return;
-
-        const { addWindow } = require("./openings/openings");
-        addWindow(canvas, room as any);
-
-        gridRef.current?.restack();
-        pushHistoryNow();
-        safeRender();
+        actionsRef.current?.addWindow();
       },
     }),
     []
