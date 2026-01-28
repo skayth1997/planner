@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import PlannerCanvas from "@/components/canvas/planner-canvas/planner-canvas";
 import type {
   PlannerCanvasHandle,
@@ -99,6 +105,24 @@ export default function HomePage() {
     setRoomW(String(Math.round(size.width)));
     setRoomH(String(Math.round(size.height)));
   };
+
+  useEffect(() => {
+    const v = localStorage.getItem("planner:gridVisible");
+    const s = localStorage.getItem("planner:gridSize");
+
+    if (v != null) setGridVisible(v === "true");
+    if (s != null) setGridSize(Number(s) || 50);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("planner:gridVisible", String(gridVisible));
+    localStorage.setItem("planner:gridSize", String(gridSize));
+  }, [gridVisible, gridSize]);
+
+  useEffect(() => {
+    canvasRef.current?.setGridVisible(gridVisible);
+    canvasRef.current?.setGridSize(gridSize);
+  }, [gridVisible, gridSize]);
 
   return (
     <main className="w-screen h-screen grid grid-cols-[340px_1fr] bg-neutral-100">

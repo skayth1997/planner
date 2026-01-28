@@ -29,9 +29,7 @@ function getSelectedCanvasObjects(canvas: Canvas): any[] {
   return objs.filter((o) => isSelectableItem(o));
 }
 
-// Style helpers
 function getBaseStyle(o: any) {
-  // furniture keeps its baseStroke/baseStrokeWidth
   if (isFurniture(o)) {
     return {
       stroke: o.data?.baseStroke ?? o.stroke ?? "#10b981",
@@ -39,11 +37,33 @@ function getBaseStyle(o: any) {
     };
   }
 
-  // openings: default based on type
   const t = o.data?.type;
-  if (t === "window")
-    return { stroke: o.stroke ?? "#3b82f6", strokeWidth: o.strokeWidth ?? 2 };
-  return { stroke: o.stroke ?? "#f59e0b", strokeWidth: o.strokeWidth ?? 2 }; // door default
+  const fallbackStroke = t === "window" ? "#3b82f6" : "#f59e0b";
+  const fallbackWidth = 2;
+
+  return {
+    stroke: o.data?.baseStroke ?? fallbackStroke,
+    strokeWidth: o.data?.baseStrokeWidth ?? fallbackWidth,
+  };
+}
+
+function setHoverEffect(o: any, on: boolean) {
+  // "Blur" effect via shadow
+  o.set({
+    shadow: on
+      ? {
+          color: "rgba(0,0,0,0.25)",
+          blur: 12,
+          offsetX: 0,
+          offsetY: 0,
+        }
+      : null,
+    objectCaching: false, // makes shadow updates reliable during hover/drag
+  });
+}
+
+function isActiveSelectionContains(active: any, obj: any) {
+  return Array.isArray(active?._objects) && active._objects.includes(obj);
 }
 
 export function createSelectionController(args: Args) {
@@ -66,7 +86,6 @@ export function createSelectionController(args: Args) {
 
       const base = getBaseStyle(o);
 
-      // Note: active can be ActiveSelection. In that case, we don't try to mark each object as active.
       if (active && o === active) {
         o.set({ stroke: ACTIVE_STROKE, strokeWidth: ACTIVE_STROKE_WIDTH });
       } else {
@@ -101,14 +120,15 @@ export function createSelectionController(args: Args) {
     scheduleRender();
   };
 
-  // ===== hover events =====
   const onMouseOver = (opt: any) => {
     const t = opt.target as any;
     if (!t || !isSelectableItem(t)) return;
 
     const active = canvas.getActiveObject() as any;
-    if (active && (active === t || Array.isArray(active?._objects))) return;
+    if (active && (active === t || isActiveSelectionContains(active, t)))
+      return;
 
+    setHoverEffect(t, true);
     t.set({ stroke: HOVER_STROKE, strokeWidth: HOVER_STROKE_WIDTH });
     t.setCoords();
     scheduleRender();
@@ -119,7 +139,10 @@ export function createSelectionController(args: Args) {
     if (!t || !isSelectableItem(t)) return;
 
     const active = canvas.getActiveObject() as any;
-    if (active && (active === t || Array.isArray(active?._objects))) return;
+    if (active && (active === t || isActiveSelectionContains(active, t)))
+      return;
+
+    setHoverEffect(t, false);
 
     const base = getBaseStyle(t);
     t.set({ stroke: base.stroke, strokeWidth: base.strokeWidth });
@@ -149,7 +172,7 @@ export function createSelectionController(args: Args) {
     attach,
     detach,
     emitSelection,
-    restyleAllFurniture: restyleAllItems, // keep old name so planner-canvas.tsx doesn’t change
-    getSelectedFurnitureObjects: () => getSelectedCanvasObjects(canvas), // keep old name too
+    restyleAllFurniture: restyleAllItems,
+    getSelectedFurnitureObjects: () => getSelectedCanvasObjects(canvas),
   };
 }

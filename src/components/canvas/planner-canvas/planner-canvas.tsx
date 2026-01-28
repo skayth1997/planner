@@ -301,11 +301,14 @@ export default forwardRef<
           segIndex: Number(s.data?.segIndex) || 0,
           t: typeof s.data?.t === "number" ? s.data.t : 0.5,
           offset: typeof s.data?.offset === "number" ? s.data.offset : 0,
+          baseStroke:
+            s.data?.baseStroke ??
+            (s.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
+          baseStrokeWidth: s.data?.baseStrokeWidth ?? 2,
         };
 
         canvas.add(rect);
 
-        // IMPORTANT: resnap to wall so it attaches to correct segment after paste
         snapOpeningToNearestWall(rect as any, room as any);
 
         rect.setCoords();
@@ -934,6 +937,12 @@ export default forwardRef<
                 typeof active.data?.offset === "number"
                   ? active.data.offset
                   : 0,
+              baseStroke:
+                active.data?.baseStroke ??
+                ((active.data?.type ?? "door") === "window"
+                  ? "#3b82f6"
+                  : "#f59e0b"),
+              baseStrokeWidth: active.data?.baseStrokeWidth ?? 2,
             };
 
             canvas.add(rect);
