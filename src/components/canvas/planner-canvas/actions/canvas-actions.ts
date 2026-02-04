@@ -1,3 +1,4 @@
+// src/components/canvas/planner-canvas/actions/canvas-actions.ts
 import type React from "react";
 import type { Canvas, Polygon } from "fabric";
 import { Rect } from "fabric";
@@ -65,12 +66,40 @@ type Deps = {
   scheduleNudgeCommit: () => void;
 };
 
+function limitFurnitureSizeToRoom(obj: any, room: any, padding = 0) {
+  if (!obj || !room) return;
+
+  const roomRect = room.getBoundingRect(false, true);
+  const maxW = Math.max(20, roomRect.width - padding * 2);
+  const maxH = Math.max(20, roomRect.height - padding * 2);
+
+  // bbox depends on rotation/scale, so iterate a couple times
+  for (let i = 0; i < 3; i++) {
+    const bbox = obj.getBoundingRect(false, true);
+    if (!bbox?.width || !bbox?.height) break;
+
+    if (bbox.width <= maxW && bbox.height <= maxH) break;
+
+    const sx = maxW / bbox.width; // <1 if too wide
+    const sy = maxH / bbox.height; // <1 if too tall
+
+    obj.scaleX = Math.max(0.05, (obj.scaleX ?? 1) * Math.min(1, sx));
+    obj.scaleY = Math.max(0.05, (obj.scaleY ?? 1) * Math.min(1, sy));
+
+    obj.setCoords();
+  }
+}
+
 export function createCanvasActions(deps: Deps) {
   const emitSelection = () => deps.selection()?.emitSelection();
 
   const restyleAll = () => {
     const sel = deps.selection();
-    sel?.restyleAllItems?.() ?? sel?.restyleAllFurniture?.();
+    if (sel?.restyleAllItems) {
+      sel.restyleAllItems();
+    } else {
+      sel?.restyleAllFurniture?.();
+    }
   };
 
   const pushHistoryNow = () => deps.history()?.pushNow();
@@ -401,6 +430,7 @@ export function createCanvasActions(deps: Deps) {
     active.setCoords();
 
     if (isF) {
+      limitFurnitureSizeToRoom(active, room as any, 0);
       clampFurnitureInsideRoomPolygon(active, room as any);
       clampFurnitureInsideRoom(active, room as any);
       snapFurnitureToRoomGrid(active, room as any, deps.getGridSize());

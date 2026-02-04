@@ -96,7 +96,7 @@ export function attachMouseController(args: Args) {
     nextZoom = Math.max(zoom.min, Math.min(zoom.max, nextZoom));
 
     // zoom towards cursor
-    const pointer = canvas.getPointer(e as any);
+    const pointer = canvas.getScenePoint(e as any);
     canvas.zoomToPoint(new Point(pointer.x, pointer.y), nextZoom);
 
     scheduleRender();

@@ -74,6 +74,27 @@ type SelectionController = ReturnType<typeof createSelectionController>;
 type GridController = ReturnType<typeof createGridController>;
 type HistoryController = ReturnType<typeof createHistoryController>;
 
+function limitFurnitureSizeToRoomBBox(obj: any, room: Polygon, padding = 0) {
+  const roomRect = room.getBoundingRect(false, true);
+
+  const maxW = Math.max(10, roomRect.width - padding * 2);
+  const maxH = Math.max(10, roomRect.height - padding * 2);
+
+  const r = obj.getBoundingRect(false, true);
+
+  if (r.width > maxW) {
+    const f = maxW / Math.max(1, r.width);
+    obj.scaleX = (obj.scaleX ?? 1) * f;
+  }
+
+  if (r.height > maxH) {
+    const f = maxH / Math.max(1, r.height);
+    obj.scaleY = (obj.scaleY ?? 1) * f;
+  }
+
+  obj.setCoords();
+}
+
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
@@ -117,6 +138,8 @@ export default forwardRef<
     null
   );
 
+  const lastTransformWasAltRef = useRef(false);
+
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -125,6 +148,8 @@ export default forwardRef<
   };
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
+
+  const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
   const emitSelection = () => {
     selectionRef.current?.emitSelection();
@@ -141,7 +166,6 @@ export default forwardRef<
 
     nudgeTimerRef.current = window.setTimeout(() => {
       if (!nudgeDirtyRef.current) return;
-
       nudgeDirtyRef.current = false;
       pushHistoryNow();
     }, 220);
@@ -190,6 +214,7 @@ export default forwardRef<
       if (!isFurniture(o)) return;
       clampFurnitureInsideRoomPolygon(o, room as any);
       clampFurnitureInsideRoom(o, room as any);
+      limitFurnitureSizeToRoomBBox(o, room, getGridSize());
       o.setCoords();
     });
 
@@ -239,7 +264,8 @@ export default forwardRef<
         if (parsed?.points && Array.isArray(parsed.points)) {
           const pts = parsed.points
             .filter(
-              (p: any) => p && typeof p.x === "number" && typeof p.y === "number"
+              (p: any) =>
+                p && typeof p.x === "number" && typeof p.y === "number"
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
@@ -280,14 +306,25 @@ export default forwardRef<
         ),
       onAfterRestore: () => {
         gridRef.current?.restack();
-        selectionRef.current?.restyleAllItems();
+        selectionRef.current?.restyleAllItems?.();
         clearGuides(canvas, guidesRef);
         updateOpeningsForRoomChange(canvas, room as any);
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
+          o.setCoords();
+        });
+
+        scheduleRender();
       },
       autosaveExtra: () => {
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -325,6 +362,7 @@ export default forwardRef<
           if (!isFurniture(o)) return;
           clampFurnitureInsideRoomPolygon(o, room as any);
           clampFurnitureInsideRoom(o, room as any);
+          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
           o.setCoords();
         });
 
@@ -336,11 +374,22 @@ export default forwardRef<
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
+          clampFurnitureInsideRoomPolygon(o, room as any);
+          clampFurnitureInsideRoom(o, room as any);
+          o.setCoords();
+        });
+
         pushHistoryNow();
 
         try {
           const pts = getRoomPoints(room);
-          localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
         } catch {}
       },
     });
@@ -369,57 +418,119 @@ export default forwardRef<
       onPanEnd: () => clearGuides(canvas, guidesRef),
     });
 
-    // ===== Fabric transforms =====
-
-    // Snap object SIZE to grid on mouse-up (object:modified), not during drag.
-    const snapObjectSizeToGrid = (obj: any, gridSize: number) => {
-      if (!obj) return;
-
-      const scaledW =
-        obj.getScaledWidth?.() ?? obj.getBoundingRect(false, true).width;
-      const scaledH =
-        obj.getScaledHeight?.() ?? obj.getBoundingRect(false, true).height;
-
-      const targetW = Math.max(gridSize, Math.round(scaledW / gridSize) * gridSize);
-      const targetH = Math.max(gridSize, Math.round(scaledH / gridSize) * gridSize);
-
-      const baseW = Math.max(1, obj.width ?? 1);
-      const baseH = Math.max(1, obj.height ?? 1);
-
-      obj.scaleX = targetW / baseW;
-      obj.scaleY = targetH / baseH;
-
-      obj.setCoords();
-    };
-
-    // ✅ Smooth scaling while dragging (no snapping here)
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
-
       if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
         emitSelection();
         return;
       }
 
-      obj.setCoords();
-      emitSelection();
-      scheduleRender();
-    });
+      // ✅ reliable Alt detection (better than only isAltPressedRef on mac)
+      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
+      lastTransformWasAltRef.current = altDown;
 
-    canvas.on("object:rotating", (opt) => {
-      const obj = opt.target as any;
-      if (
-        obj &&
-        (isFurniture(obj) || isOpening(obj)) &&
-        isShiftPressedRef.current
-      ) {
-        const step = 15;
-        const a = obj.angle ?? 0;
-        obj.angle = Math.round(a / step) * step;
-        obj.setCoords();
+      // ⌥ Alt → free scale (no snap, no clamp, no "limit" while dragging)
+      if (altDown) {
+        emitSelection();
+        safeRender();
+        return;
       }
+
+      // Only furniture snaps size (openings scale freely)
+      if (!isFurniture(obj)) {
+        emitSelection();
+        safeRender();
+        return;
+      }
+
+      const gridSize = getGridSize();
+
+      // Which handle is being dragged (so we can keep anchor on opposite side)
+      const corner = (opt as any)?.transform?.corner as
+        | "tl"
+        | "tr"
+        | "bl"
+        | "br"
+        | "ml"
+        | "mr"
+        | "mt"
+        | "mb"
+        | undefined;
+
+      const scaleXAllowed =
+        corner === "tl" ||
+        corner === "tr" ||
+        corner === "bl" ||
+        corner === "br" ||
+        corner === "ml" ||
+        corner === "mr";
+
+      const scaleYAllowed =
+        corner === "tl" ||
+        corner === "tr" ||
+        corner === "bl" ||
+        corner === "br" ||
+        corner === "mt" ||
+        corner === "mb";
+
+      const getAnchorOrigin = (c?: string) => {
+        switch (c) {
+          case "tl":
+            return { ox: "right", oy: "bottom" };
+          case "tr":
+            return { ox: "left", oy: "bottom" };
+          case "bl":
+            return { ox: "right", oy: "top" };
+          case "br":
+            return { ox: "left", oy: "top" };
+          case "ml":
+            return { ox: "right", oy: "center" };
+          case "mr":
+            return { ox: "left", oy: "center" };
+          case "mt":
+            return { ox: "center", oy: "bottom" };
+          case "mb":
+            return { ox: "center", oy: "top" };
+          default:
+            return { ox: "center", oy: "center" };
+        }
+      };
+
+      const { ox, oy } = getAnchorOrigin(corner);
+      const anchorPoint = obj.getPointByOrigin(ox, oy);
+
+      // Use scaled size (rotation-safe)
+      const currentW = obj.getScaledWidth();
+      const currentH = obj.getScaledHeight();
+
+      const baseW = Math.max(1, obj.width ?? 1);
+      const baseH = Math.max(1, obj.height ?? 1);
+
+      // snap each axis only if that axis is being scaled by the handle
+      if (scaleXAllowed) {
+        const targetW = Math.max(
+          gridSize,
+          Math.round(currentW / gridSize) * gridSize
+        );
+        const nextScaleX = targetW / baseW;
+        if (Number.isFinite(nextScaleX)) obj.scaleX = nextScaleX;
+      }
+
+      if (scaleYAllowed) {
+        const targetH = Math.max(
+          gridSize,
+          Math.round(currentH / gridSize) * gridSize
+        );
+        const nextScaleY = targetH / baseH;
+        if (Number.isFinite(nextScaleY)) obj.scaleY = nextScaleY;
+      }
+
+      // Keep the opposite side pinned (prevents drifting)
+      obj.setPositionByOrigin(anchorPoint, ox, oy);
+      obj.setCoords();
+
       emitSelection();
-      scheduleRender();
+      safeRender();
     });
 
     canvas.on("object:moving", (opt) => {
@@ -431,7 +542,9 @@ export default forwardRef<
         return;
       }
 
-      // opening: always snap to nearest wall (you can decide to bypass with Alt later)
+      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
+      lastTransformWasAltRef.current = altDown;
+
       if (isOpening(obj)) {
         snapOpeningToNearestWall(obj, room as any);
         obj.setCoords();
@@ -463,9 +576,46 @@ export default forwardRef<
       scheduleRender();
     });
 
+    canvas.on("object:rotating", (opt) => {
+      const obj = opt.target as any;
+
+      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
+      lastTransformWasAltRef.current = altDown;
+
+      if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
+        emitSelection();
+        scheduleRender();
+        return;
+      }
+
+      if (isShiftPressedRef.current) {
+        const step = 15;
+        const a = obj.angle ?? 0;
+        obj.angle = Math.round(a / step) * step;
+      }
+
+      obj.setCoords();
+
+      emitSelection();
+      scheduleRender();
+    });
+
     canvas.on("object:modified", (opt) => {
       const obj = opt.target as any;
       if (!obj) return;
+
+      const wasAlt = lastTransformWasAltRef.current;
+      lastTransformWasAltRef.current = false;
+
+      if (wasAlt) {
+        obj.setCoords();
+        emitSelection();
+        selectionRef.current?.restyleAllItems?.();
+        clearGuides(canvas, guidesRef);
+        pushHistoryNow();
+        scheduleRender();
+        return;
+      }
 
       if (isOpening(obj)) {
         snapOpeningToNearestWall(obj, room as any);
@@ -480,19 +630,17 @@ export default forwardRef<
 
       const gridSize = getGridSize();
 
-      // ✅ snap SIZE to grid on mouse-up
-      snapObjectSizeToGrid(obj, gridSize);
-
-      // ✅ snap position to grid on mouse-up
       snapFurnitureToRoomGrid(obj, room as any, gridSize);
 
-      // ✅ clamp after modify
+      limitFurnitureSizeToRoomBBox(obj, room as any, gridSize);
+
       clampFurnitureInsideRoomPolygon(obj, room as any);
       clampFurnitureInsideRoom(obj, room as any);
 
       obj.setCoords();
+
       emitSelection();
-      selectionRef.current?.restyleAllItems();
+      selectionRef.current?.restyleAllItems?.();
       clearGuides(canvas, guidesRef);
 
       pushHistoryNow();
@@ -616,10 +764,18 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllItems();
+        selectionRef.current?.restyleAllItems?.();
 
         const snap = layoutJson ?? serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          limitFurnitureSizeToRoomBBox(o, room as any, getGridSize());
+          clampFurnitureInsideRoomPolygon(o, room as any);
+          clampFurnitureInsideRoom(o, room as any);
+          o.setCoords();
+        });
 
         safeRender();
       },
@@ -644,10 +800,18 @@ export default forwardRef<
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllItems();
+        selectionRef.current?.restyleAllItems?.();
 
         const snap = serializeState(canvas);
         historyRef.current?.setHistoryFromSnapshot(snap);
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          limitFurnitureSizeToRoomBBox(o, room as any, getGridSize());
+          clampFurnitureInsideRoomPolygon(o, room as any);
+          clampFurnitureInsideRoom(o, room as any);
+          o.setCoords();
+        });
 
         pushHistoryNow();
         safeRender();
