@@ -60,6 +60,7 @@ import {
   isOpening,
   snapOpeningToNearestWall,
   updateOpeningsForRoomChange,
+  toggleDoorOpen,
 } from "./openings/openings";
 
 import { attachKeyboardController } from "./input/keyboard-controller";
@@ -104,11 +105,9 @@ export default forwardRef<
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
 
-  // ROOM polygon
   const roomRef = useRef<Polygon | null>(null);
   const roomHandlesRef = useRef<Circle[]>([]);
 
-  // keyboard state
   const isSpacePressedRef = useRef(false);
   const isShiftPressedRef = useRef(false);
   const isAltPressedRef = useRef(false);
@@ -118,22 +117,17 @@ export default forwardRef<
 
   const guidesRef = useRef<GuideLine[]>([]);
 
-  // nudge batching
   const nudgeTimerRef = useRef<number | null>(null);
   const nudgeDirtyRef = useRef(false);
 
-  // controllers
   const selectionRef = useRef<SelectionController | null>(null);
   const gridRef = useRef<GridController | null>(null);
   const historyRef = useRef<HistoryController | null>(null);
 
-  // render
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
-  // clipboard (supports furniture + openings)
   const clipboardRef = useRef<CanvasSnapshotItem[] | null>(null);
 
-  // actions controller
   const actionsRef = useRef<ReturnType<typeof createCanvasActions> | null>(
     null
   );
@@ -171,7 +165,6 @@ export default forwardRef<
     }, 220);
   };
 
-  // ===== Room API (bbox) =====
   const getRoomSizeInternal = (): RoomSize => {
     const room = roomRef.current;
     if (!room) return { width: 0, height: 0 };
@@ -252,11 +245,9 @@ export default forwardRef<
       });
     });
 
-    // === Create room polygon + handles ===
     const room = createRoomPolygon(canvas);
     roomRef.current = room;
 
-    // Load saved room points (if any)
     const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
     if (savedRoom) {
       try {
@@ -425,18 +416,15 @@ export default forwardRef<
         return;
       }
 
-      // ✅ reliable Alt detection (better than only isAltPressedRef on mac)
       const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
       lastTransformWasAltRef.current = altDown;
 
-      // ⌥ Alt → free scale (no snap, no clamp, no "limit" while dragging)
       if (altDown) {
         emitSelection();
         safeRender();
         return;
       }
 
-      // Only furniture snaps size (openings scale freely)
       if (!isFurniture(obj)) {
         emitSelection();
         safeRender();
@@ -445,7 +433,6 @@ export default forwardRef<
 
       const gridSize = getGridSize();
 
-      // Which handle is being dragged (so we can keep anchor on opposite side)
       const corner = (opt as any)?.transform?.corner as
         | "tl"
         | "tr"
@@ -499,14 +486,12 @@ export default forwardRef<
       const { ox, oy } = getAnchorOrigin(corner);
       const anchorPoint = obj.getPointByOrigin(ox, oy);
 
-      // Use scaled size (rotation-safe)
       const currentW = obj.getScaledWidth();
       const currentH = obj.getScaledHeight();
 
       const baseW = Math.max(1, obj.width ?? 1);
       const baseH = Math.max(1, obj.height ?? 1);
 
-      // snap each axis only if that axis is being scaled by the handle
       if (scaleXAllowed) {
         const targetW = Math.max(
           gridSize,
@@ -525,7 +510,6 @@ export default forwardRef<
         if (Number.isFinite(nextScaleY)) obj.scaleY = nextScaleY;
       }
 
-      // Keep the opposite side pinned (prevents drifting)
       obj.setPositionByOrigin(anchorPoint, ox, oy);
       obj.setCoords();
 
@@ -564,7 +548,6 @@ export default forwardRef<
 
       const shiftDown = isShiftPressedRef.current;
 
-      // guides only when not Shift and not Alt
       if (!shiftDown && !isAltPressedRef.current) {
         alignAndGuide(canvas, room as any, guidesRef, obj);
         obj.setCoords();
@@ -645,6 +628,20 @@ export default forwardRef<
 
       pushHistoryNow();
       scheduleRender();
+    });
+
+    canvas.on("mouse:dblclick", (opt) => {
+      const obj = opt.target as any;
+      if (!obj) return;
+
+      if (isOpening(obj) && obj.data?.type === "door") {
+        toggleDoorOpen(obj, room as any);
+
+        obj.setCoords();
+        emitSelection();
+        pushHistoryNow();
+        scheduleRender();
+      }
     });
 
     const actions = actionsRef.current;
