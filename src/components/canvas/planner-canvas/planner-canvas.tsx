@@ -729,6 +729,10 @@ export default forwardRef<
         actionsRef.current?.setSelectedProps(patch);
       },
 
+      toggleSelectedDoor() {
+        actionsRef.current?.toggleSelectedDoor();
+      },
+
       fitRoom() {
         actionsRef.current?.fitRoom();
       },

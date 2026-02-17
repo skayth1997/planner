@@ -18,6 +18,7 @@ import {
   addDoor,
   addWindow,
   applyDoorHinge,
+  toggleDoorOpen,
 } from "../openings/openings";
 
 import { clearGuides } from "../selection/guides";
@@ -497,6 +498,24 @@ export function createCanvasActions(deps: Deps) {
   const undo = () => deps.history()?.undo();
   const redo = () => deps.history()?.redo();
 
+  const toggleSelectedDoor = () => {
+    const canvas = deps.getCanvas();
+    const room = deps.getRoom();
+    if (!canvas || !room) return;
+
+    const active = canvas.getActiveObject() as any;
+    if (!active) return;
+
+    if (isOpening(active) && active.data?.type === "door") {
+      toggleDoorOpen(active, room as any);
+
+      active.setCoords();
+      deps.onSelectionChange(getSelectedInfo(active));
+      pushHistoryNow();
+      deps.safeRender();
+    }
+  };
+
   return {
     deleteSelected,
     duplicateSelected,
@@ -505,13 +524,11 @@ export function createCanvasActions(deps: Deps) {
     nudgeSelected,
     moveLayer,
     setSelectedProps,
-
     fitRoom,
-
     addFurniture: addFurnitureAction,
     addDoor: addDoorAction,
     addWindow: addWindowAction,
-
+    toggleSelectedDoor,
     undo,
     redo,
   };

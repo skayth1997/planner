@@ -29,32 +29,50 @@ export function getOpeningType(obj: any): OpeningType | "unknown" {
   return obj?.data?.type ?? "unknown";
 }
 
-export function getSelectedInfo(obj: any): SelectedInfo {
-  const rect = obj.getBoundingRect(false, true);
+export function getSelectedInfo(obj: any): SelectedInfo | null {
+  if (!obj) return null;
 
-  const kind = getObjectKind(obj);
-  const type =
-    kind === "furniture"
-      ? getFurnitureType(obj)
-      : kind === "opening"
-      ? getOpeningType(obj)
-      : "unknown";
+  const id = obj?.data?.id ?? "";
+
+  const left = obj.left ?? 0;
+  const top = obj.top ?? 0;
+
+  const width = obj.getScaledWidth?.() ?? obj.width ?? 0;
+  const height = obj.getScaledHeight?.() ?? obj.height ?? 0;
+
+  const angle = obj.angle ?? 0;
+
+  const kind = obj?.data?.kind;
+  const dataType = obj?.data?.type;
+
+  let type: SelectedInfo["type"] = "unknown";
+
+  if (kind === "opening" && (dataType === "door" || dataType === "window")) {
+    type = dataType;
+  } else if (obj?.data?.type) {
+    type = obj.data.type;
+  }
+
   const hinge =
     kind === "opening" &&
-    getOpeningType(obj) === "door" &&
-    (obj.data?.hinge === "end" || obj.data?.hinge === "start")
+    dataType === "door" &&
+    (obj.data?.hinge === "start" || obj.data?.hinge === "end")
       ? obj.data.hinge
       : undefined;
 
+  const isOpen =
+    kind === "opening" && dataType === "door" ? !!obj.data?.isOpen : undefined;
+
   return {
-    id: obj.data?.id ?? makeId(),
+    id,
     kind,
     type,
+    left,
+    top,
+    width,
+    height,
+    angle,
     hinge,
-    left: obj.left ?? 0,
-    top: obj.top ?? 0,
-    width: rect.width,
-    height: rect.height,
-    angle: obj.angle ?? 0,
+    isOpen,
   };
 }

@@ -13,6 +13,7 @@ export type SelectedInfo = {
   height: number;
   angle: number;
   hinge?: "start" | "end";
+  isOpen?: boolean;
 };
 
 export type RoomSize = { width: number; height: number };
@@ -37,6 +38,7 @@ export type PlannerCanvasHandle = {
   setGridSize?: (size: number) => void;
   addDoor: () => void;
   addWindow: () => void;
+  toggleSelectedDoor(): void;
 };
 
 export type FurnitureSnapshot = {

@@ -54,6 +54,8 @@ export default function HomePage() {
 
   const [hinge, setHinge] = useState<"start" | "end">("start");
 
+  const [isOpen, setIsOpen] = useState(false);
+
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
 
@@ -61,11 +63,16 @@ export default function HomePage() {
       setW("");
       setH("");
       setA("");
+      setIsOpen(false);
       return;
     }
 
     if (info?.hinge) {
       setHinge(info.hinge);
+    }
+
+    if (info?.isOpen !== undefined) {
+      setIsOpen(info.isOpen);
     }
 
     setW(Math.round(info.width).toString());
@@ -382,6 +389,17 @@ export default function HomePage() {
                     </select>
                   </label>
                 )}
+
+                {selected.type === "door" && (
+                  <button
+                    type="button"
+                    className={cls(btnBase, btnPrimary, "w-full")}
+                    onClick={() => canvasRef.current?.toggleSelectedDoor()}
+                  >
+                    {isOpen ? "Close Door" : "Open Door"}
+                  </button>
+                )}
+
               </div>
 
               <div className="flex gap-2">
