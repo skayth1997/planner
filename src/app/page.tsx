@@ -380,9 +380,14 @@ export default function HomePage() {
                     <select
                       className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
                       value={hinge}
-                      onChange={(e) =>
-                        setHinge(e.target.value as "start" | "end")
-                      }
+                      onChange={(e) => {
+                        const next = e.target.value as "start" | "end";
+                        setHinge(next);
+
+                        canvasRef.current?.setSelectedProps({
+                          hinge: next,
+                        });
+                      }}
                     >
                       <option value="start">Start</option>
                       <option value="end">End</option>
