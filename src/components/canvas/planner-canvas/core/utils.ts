@@ -39,11 +39,18 @@ export function getSelectedInfo(obj: any): SelectedInfo {
       : kind === "opening"
       ? getOpeningType(obj)
       : "unknown";
+  const hinge =
+    kind === "opening" &&
+    getOpeningType(obj) === "door" &&
+    (obj.data?.hinge === "end" || obj.data?.hinge === "start")
+      ? obj.data.hinge
+      : undefined;
 
   return {
     id: obj.data?.id ?? makeId(),
     kind,
     type,
+    hinge,
     left: obj.left ?? 0,
     top: obj.top ?? 0,
     width: rect.width,

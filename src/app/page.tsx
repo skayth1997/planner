@@ -52,6 +52,8 @@ export default function HomePage() {
   const [gridVisible, setGridVisible] = useState(true);
   const [gridSize, setGridSize] = useState<number>(GRID_SIZE);
 
+  const [hinge, setHinge] = useState<"start" | "end">("start");
+
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
 
@@ -60,6 +62,10 @@ export default function HomePage() {
       setH("");
       setA("");
       return;
+    }
+
+    if (info?.hinge) {
+      setHinge(info.hinge);
     }
 
     setW(Math.round(info.width).toString());
@@ -80,6 +86,7 @@ export default function HomePage() {
       width: Number.isFinite(nextW) ? nextW : undefined,
       height: Number.isFinite(nextH) ? nextH : undefined,
       angle: Number.isFinite(nextA) ? nextA : undefined,
+      hinge: selected?.type === "door" ? hinge : undefined,
     });
   };
 
@@ -329,7 +336,7 @@ export default function HomePage() {
             </p>
           ) : (
             <div className="mt-3 flex flex-col gap-3">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <label className="text-xs text-neutral-600">
                   Width
                   <input
@@ -359,6 +366,22 @@ export default function HomePage() {
                     inputMode="numeric"
                   />
                 </label>
+
+                {selected.type === "door" && (
+                  <label className="text-xs text-neutral-600">
+                    Hinge
+                    <select
+                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
+                      value={hinge}
+                      onChange={(e) =>
+                        setHinge(e.target.value as "start" | "end")
+                      }
+                    >
+                      <option value="start">Start</option>
+                      <option value="end">End</option>
+                    </select>
+                  </label>
+                )}
               </div>
 
               <div className="flex gap-2">

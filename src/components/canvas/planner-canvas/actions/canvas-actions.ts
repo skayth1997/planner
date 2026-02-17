@@ -1,4 +1,3 @@
-// src/components/canvas/planner-canvas/actions/canvas-actions.ts
 import type React from "react";
 import type { Canvas, Polygon } from "fabric";
 import { Rect } from "fabric";
@@ -18,6 +17,7 @@ import {
   snapOpeningToNearestWall,
   addDoor,
   addWindow,
+  applyDoorHinge,
 } from "../openings/openings";
 
 import { clearGuides } from "../selection/guides";
@@ -73,15 +73,14 @@ function limitFurnitureSizeToRoom(obj: any, room: any, padding = 0) {
   const maxW = Math.max(20, roomRect.width - padding * 2);
   const maxH = Math.max(20, roomRect.height - padding * 2);
 
-  // bbox depends on rotation/scale, so iterate a couple times
   for (let i = 0; i < 3; i++) {
     const bbox = obj.getBoundingRect(false, true);
     if (!bbox?.width || !bbox?.height) break;
 
     if (bbox.width <= maxW && bbox.height <= maxH) break;
 
-    const sx = maxW / bbox.width; // <1 if too wide
-    const sy = maxH / bbox.height; // <1 if too tall
+    const sx = maxW / bbox.width;
+    const sy = maxH / bbox.height;
 
     obj.scaleX = Math.max(0.05, (obj.scaleX ?? 1) * Math.min(1, sx));
     obj.scaleY = Math.max(0.05, (obj.scaleY ?? 1) * Math.min(1, sy));
@@ -397,6 +396,7 @@ export function createCanvasActions(deps: Deps) {
     width?: number;
     height?: number;
     angle?: number;
+    hinge?: "start" | "end";
   }) => {
     const canvas = deps.getCanvas();
     const room = deps.getRoom();
@@ -405,14 +405,16 @@ export function createCanvasActions(deps: Deps) {
     const active = canvas.getActiveObject() as any;
     if (!active) return;
 
-    // MVP: don't edit ActiveSelection from side panel
     if (Array.isArray(active?._objects)) return;
 
     const isF = isFurniture(active);
     const isO = isOpening(active);
     if (!isF && !isO) return;
 
-    // Apply width/height by scaling to match bounding rect size
+    if (patch.hinge && isO && active.data?.type === "door") {
+      applyDoorHinge(active, room as any, patch.hinge);
+    }
+
     if (typeof patch.width === "number" && patch.width > 1) {
       const current = active.getBoundingRect(false, true).width;
       const factor = patch.width / Math.max(1, current);

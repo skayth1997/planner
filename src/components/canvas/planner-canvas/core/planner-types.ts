@@ -5,18 +5,14 @@ export type OpeningType = "door" | "window";
 
 export type SelectedInfo = {
   id: string;
-
-  // ✅ NEW (so panel can show what is selected)
   kind: "furniture" | "opening" | "unknown";
-
-  // furniture type OR opening type
   type: FurnitureType | OpeningType | "unknown";
-
   left: number;
   top: number;
-  width: number; // actual width (scaled)
-  height: number; // actual height (scaled)
+  width: number;
+  height: number;
   angle: number;
+  hinge?: "start" | "end";
 };
 
 export type RoomSize = { width: number; height: number };
@@ -26,25 +22,19 @@ export type PlannerCanvasHandle = {
   deleteSelected: () => void;
   duplicateSelected: () => void;
   setSelectedProps: (
-    patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle">>
+    patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle" | "hinge">>
   ) => void;
-
   fitRoom: () => void;
-
   undo: () => void;
   redo: () => void;
-
   save: () => void;
   load: () => void;
   exportJson: () => void;
   importJsonString: (json: string) => void;
-
   getRoomSize: () => RoomSize;
   setRoomSize: (size: RoomSize) => void;
-
   setGridVisible?: (visible: boolean) => void;
   setGridSize?: (size: number) => void;
-
   addDoor: () => void;
   addWindow: () => void;
 };
@@ -72,8 +62,6 @@ export type FurnitureSnapshot = {
 };
 
 export type GuideLine = Line;
-
-export type IsFurnitureFn = (obj: any) => obj is Rect;
 
 export type OpeningSnapshot = {
   left: number;

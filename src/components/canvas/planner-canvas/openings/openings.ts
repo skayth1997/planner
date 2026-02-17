@@ -45,12 +45,14 @@ function segmentAngleDeg(a: Pt, b: Pt) {
   return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
 }
 
+// unit normal (perp) for segment a->b
 function segmentNormal(a: Pt, b: Pt) {
   const vx = b.x - a.x;
   const vy = b.y - a.y;
   const len = Math.hypot(vx, vy) || 1;
   const ux = vx / len;
   const uy = vy / len;
+  // rotate 90deg
   return { nx: -uy, ny: ux, ux, uy };
 }
 
@@ -59,12 +61,17 @@ function degToRad(a: number) {
 }
 
 function doorLeafClosedAngle(baseWallAngle: number, hinge: "start" | "end") {
+  // start hinge -> leaf along wall direction
+  // end hinge   -> leaf opposite wall direction
   return hinge === "start" ? baseWallAngle : baseWallAngle + 180;
 }
 
 function doorLeafOpenAngle(leafClosedAngle: number, hinge: "start" | "end") {
+  // start hinge swings +90, end hinge swings -90
   return hinge === "start" ? leafClosedAngle + 90 : leafClosedAngle - 90;
 }
+
+// ===== Arc helpers =====
 
 function getDoorArc(canvas: Canvas, doorId: string) {
   return canvas
@@ -79,6 +86,11 @@ function removeDoorArc(canvas: Canvas, doorId: string) {
   if (arc) canvas.remove(arc);
 }
 
+/**
+ * Super-safe across Fabric builds:
+ * remove existing arc and add a new Path.
+ * Avoid stacking APIs (sendToBack/insertAt/moveTo) because they differ between builds.
+ */
 function upsertDoorArcPath(
   canvas: Canvas,
   doorId: string,
@@ -97,6 +109,7 @@ function upsertDoorArcPath(
   const x2 = hingePt.x + Math.cos(endRad) * radius;
   const y2 = hingePt.y + Math.sin(endRad) * radius;
 
+  // SVG arc: M x1 y1 A r r 0 0 sweepFlag x2 y2
   const d = `M ${x1} ${y1} A ${radius} ${radius} 0 0 ${sweepFlag} ${x2} ${y2}`;
 
   const existing = getDoorArc(canvas, doorId);
@@ -146,11 +159,18 @@ function syncDoorArcForDoor(obj: any, room: Polygon) {
 
   const s = segs[segIndex];
   const baseAngle = segmentAngleDeg(s.a, s.b);
+
+  // hinge point on segment
   const hx = s.a.x + (s.b.x - s.a.x) * t;
   const hy = s.a.y + (s.b.y - s.a.y) * t;
+
+  // radius = door leaf length (scaled width)
   const radius = Math.max(4, Number(obj.getScaledWidth?.() ?? obj.width ?? 0));
+
   const leafClosed = doorLeafClosedAngle(baseAngle, hinge);
   const leafOpen = doorLeafOpenAngle(leafClosed, hinge);
+
+  // hinge=start swing +90 => sweep 1; hinge=end swing -90 => sweep 0
   const sweep: 0 | 1 = hinge === "start" ? 1 : 0;
 
   upsertDoorArcPath(
@@ -164,20 +184,93 @@ function syncDoorArcForDoor(obj: any, room: Polygon) {
   );
 }
 
+// ===== Public API =====
+
 export function isOpening(obj: any) {
   return obj?.data?.kind === "opening";
 }
 
+/**
+ * Snap opening to nearest wall.
+ * Window: snaps by center.
+ * Door: snaps by hinge point (stable when hinge changes).
+ *
+ * Stores segIndex + t, where t is the hinge location for doors.
+ */
 export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
 
   const { segs } = segsFromRoom(room);
   if (segs.length < 3) return;
 
-  const c = obj.getCenterPoint();
-  const p = { x: c.x, y: c.y };
+  const prevOffset = typeof obj.data?.offset === "number" ? obj.data.offset : 0;
 
-  let best = {
+  const isDoor = obj.data?.type === "door";
+  const hinge =
+    obj.data?.hinge === "end" ? ("end" as const) : ("start" as const);
+  const isOpen = !!obj.data?.isOpen;
+
+  // ===== WINDOW (center-based) =====
+  if (!isDoor) {
+    const c = obj.getCenterPoint();
+    const p = { x: c.x, y: c.y };
+
+    let best = {
+      segIndex: 0,
+      t: 0,
+      d2: Number.POSITIVE_INFINITY,
+      q: { x: 0, y: 0 },
+      a: segs[0].a,
+      b: segs[0].b,
+    };
+
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      const proj = projectPointToSegment(p, s.a, s.b);
+      if (proj.d2 < best.d2) {
+        best = {
+          segIndex: i,
+          t: proj.t,
+          d2: proj.d2,
+          q: proj.q,
+          a: s.a,
+          b: s.b,
+        };
+      }
+    }
+
+    const { nx, ny } = segmentNormal(best.a, best.b);
+    const baseAngle = segmentAngleDeg(best.a, best.b);
+
+    obj.set({
+      left: best.q.x + nx * prevOffset,
+      top: best.q.y + ny * prevOffset,
+      originX: "center",
+      originY: "center",
+      angle: baseAngle,
+    });
+
+    obj.setCoords();
+
+    obj.data = {
+      ...(obj.data ?? {}),
+      kind: "opening",
+      segIndex: best.segIndex,
+      t: best.t,
+      offset: prevOffset,
+    };
+
+    return;
+  }
+
+  // ===== DOOR (hinge-based) =====
+  const hingePt = obj.getPointByOrigin(
+    hinge === "start" ? "left" : "right",
+    "center"
+  );
+  const hp = { x: hingePt.x, y: hingePt.y };
+
+  let bestDoor = {
     segIndex: 0,
     t: 0,
     d2: Number.POSITIVE_INFINITY,
@@ -188,9 +281,9 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
 
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
-    const proj = projectPointToSegment(p, s.a, s.b);
-    if (proj.d2 < best.d2) {
-      best = {
+    const proj = projectPointToSegment(hp, s.a, s.b);
+    if (proj.d2 < bestDoor.d2) {
+      bestDoor = {
         segIndex: i,
         t: proj.t,
         d2: proj.d2,
@@ -201,41 +294,45 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     }
   }
 
-  const { nx, ny } = segmentNormal(best.a, best.b);
-
-  const prevOffset = typeof obj.data?.offset === "number" ? obj.data.offset : 0;
-
-  const targetCx = best.q.x + nx * prevOffset;
-  const targetCy = best.q.y + ny * prevOffset;
-
-  const baseAngle = segmentAngleDeg(best.a, best.b);
-
-  const isDoor = obj.data?.type === "door";
-  const isOpen = !!obj.data?.isOpen;
-  const hinge = obj.data?.hinge === "end" ? "end" : "start";
+  const baseAngle = segmentAngleDeg(bestDoor.a, bestDoor.b);
   const openAngle = hinge === "start" ? baseAngle + 90 : baseAngle - 90;
 
+  // offset along wall normal (optional)
+  const { nx, ny } = segmentNormal(bestDoor.a, bestDoor.b);
+  const px = bestDoor.q.x + nx * prevOffset;
+  const py = bestDoor.q.y + ny * prevOffset;
+
   obj.set({
-    left: targetCx,
-    top: targetCy,
-    originX: "center",
+    originX: hinge === "start" ? "left" : "right",
     originY: "center",
-    angle: isDoor && isOpen ? openAngle : baseAngle,
+    angle: isOpen ? openAngle : baseAngle,
   });
+
+  obj.setPositionByOrigin(
+    new Point(px, py),
+    hinge === "start" ? "left" : "right",
+    "center"
+  );
 
   obj.setCoords();
 
+  // IMPORTANT: store hinge-based attachment
   obj.data = {
     ...(obj.data ?? {}),
     kind: "opening",
-    segIndex: best.segIndex,
-    t: best.t,
+    segIndex: bestDoor.segIndex,
+    t: bestDoor.t,
     offset: prevOffset,
   };
 
-  if (obj.data?.type === "door") syncDoorArcForDoor(obj, room);
+  syncDoorArcForDoor(obj, room);
 }
 
+/**
+ * Update attached openings when the room changes.
+ * Windows: center-based.
+ * Doors: hinge-based.
+ */
 export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
   const { segs } = segsFromRoom(room);
   if (segs.length < 3) return;
@@ -254,6 +351,8 @@ export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
     }
 
     const s = segs[idx];
+
+    // hinge point on wall (doors) OR attach point (windows)
     const cx = s.a.x + (s.b.x - s.a.x) * t;
     const cy = s.a.y + (s.b.y - s.a.y) * t;
 
@@ -262,19 +361,41 @@ export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
 
     const isDoor = o.data?.type === "door";
     const isOpen = !!o.data?.isOpen;
-    const hinge = o.data?.hinge === "end" ? "end" : "start";
+    const hinge =
+      o.data?.hinge === "end" ? ("end" as const) : ("start" as const);
     const openAngle = hinge === "start" ? baseAngle + 90 : baseAngle - 90;
 
-    o.set({
-      originX: "center",
-      originY: "center",
-      left: cx + nx * offset,
-      top: cy + ny * offset,
-      angle: isDoor && isOpen ? openAngle : baseAngle,
-    });
-    o.setCoords();
+    const px = cx + nx * offset;
+    const py = cy + ny * offset;
 
-    if (o.data?.type === "door") syncDoorArcForDoor(o, room);
+    if (!isDoor) {
+      // window
+      o.set({
+        originX: "center",
+        originY: "center",
+        left: px,
+        top: py,
+        angle: baseAngle,
+      });
+      o.setCoords();
+      return;
+    }
+
+    // door (hinge pivot)
+    o.set({
+      originX: hinge === "start" ? "left" : "right",
+      originY: "center",
+      angle: isOpen ? openAngle : baseAngle,
+    });
+
+    o.setPositionByOrigin(
+      new Point(px, py),
+      hinge === "start" ? "left" : "right",
+      "center"
+    );
+
+    o.setCoords();
+    syncDoorArcForDoor(o, room);
   });
 }
 
@@ -282,47 +403,22 @@ export function toggleDoorOpen(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
   if (obj.data?.type !== "door") return;
 
-  const segIndex = Number(obj.data?.segIndex);
-  const t = clamp01(Number(obj.data?.t));
-  const hinge = obj.data?.hinge === "end" ? "end" : "start";
-  const isOpen = !!obj.data?.isOpen;
+  obj.data = { ...(obj.data ?? {}), isOpen: !obj.data?.isOpen };
+  // hinge-based snapping will keep the door stable and update arc
+  snapOpeningToNearestWall(obj, room);
+}
 
-  const { segs } = segsFromRoom(room);
-  if (!Number.isFinite(segIndex) || segIndex < 0 || segIndex >= segs.length)
-    return;
+export function applyDoorHinge(
+  obj: any,
+  room: Polygon,
+  hinge: "start" | "end"
+) {
+  if (!isOpening(obj)) return;
+  if (obj.data?.type !== "door") return;
 
-  const s = segs[segIndex];
-  const baseAngle = segmentAngleDeg(s.a, s.b);
-
-  const hx = s.a.x + (s.b.x - s.a.x) * t;
-  const hy = s.a.y + (s.b.y - s.a.y) * t;
-
-  obj.set({
-    originX: hinge === "start" ? "left" : "right",
-    originY: "center",
-  });
-
-  obj.setPositionByOrigin(
-    new Point(hx, hy),
-    hinge === "start" ? "left" : "right",
-    "center"
-  );
-
-  const openAngle = hinge === "start" ? baseAngle + 90 : baseAngle - 90;
-
-  obj.set({
-    angle: isOpen ? baseAngle : openAngle,
-  });
-
-  obj.data = {
-    ...(obj.data ?? {}),
-    isOpen: !isOpen,
-    hinge,
-  };
-
-  obj.setCoords();
-
-  syncDoorArcForDoor(obj, room);
+  obj.data = { ...(obj.data ?? {}), hinge };
+  // hinge-based snapping keeps position stable and updates arc
+  snapOpeningToNearestWall(obj, room);
 }
 
 export function addDoor(canvas: Canvas, room: Polygon) {
