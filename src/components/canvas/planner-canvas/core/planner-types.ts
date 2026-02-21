@@ -3,6 +3,17 @@ import type { Rect, Line } from "fabric";
 export type FurnitureType = "sofa" | "table" | "chair";
 export type OpeningType = "door" | "window";
 
+export type OpeningKind = "door" | "window";
+
+export type OpeningData = {
+  type: OpeningKind;
+  wallIndex?: number;
+  t?: number;
+  offset?: number;
+  hinge?: "start" | "end";
+  isOpen?: boolean;
+};
+
 export type SelectedInfo = {
   id: string;
   kind: "furniture" | "opening" | "unknown";

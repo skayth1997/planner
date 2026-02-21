@@ -1,18 +1,20 @@
 import type { Canvas, Polygon } from "fabric";
 import { Rect, Point, Path } from "fabric";
 import { makeId } from "../core/utils";
+import { projectPointToSegment } from "./wall-math";
+import { getRoomPoints } from "../room/room-walls";
 
 type Pt = { x: number; y: number };
 
-// Put this into constants later if you want (planner-constants.ts)
 const DOOR_INSET = 12;
 
 function segsFromRoom(room: Polygon) {
-  const pts = (room.points ?? []) as any[];
+  const pts = getRoomPoints(room) as Pt[];
   const poly: Pt[] = pts.map((p) => ({
     x: Number(p.x) || 0,
     y: Number(p.y) || 0,
   }));
+
   const segs: Array<{ a: Pt; b: Pt }> = [];
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
@@ -26,29 +28,10 @@ function clamp01(t: number) {
   return Math.max(0, Math.min(1, t));
 }
 
-function projectPointToSegment(p: Pt, a: Pt, b: Pt) {
-  const abx = b.x - a.x;
-  const aby = b.y - a.y;
-  const apx = p.x - a.x;
-  const apy = p.y - a.y;
-
-  const ab2 = abx * abx + aby * aby;
-  const t = ab2 > 0 ? (apx * abx + apy * aby) / ab2 : 0;
-  const tt = clamp01(t);
-
-  const q = { x: a.x + abx * tt, y: a.y + aby * tt };
-  const dx = p.x - q.x;
-  const dy = p.y - q.y;
-  const d2 = dx * dx + dy * dy;
-
-  return { q, t: tt, d2 };
-}
-
 function segmentAngleDeg(a: Pt, b: Pt) {
   return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
 }
 
-// raw perp normal for segment a->b (unknown in/out direction)
 function segmentNormal(a: Pt, b: Pt) {
   const vx = b.x - a.x;
   const vy = b.y - a.y;
@@ -59,7 +42,6 @@ function segmentNormal(a: Pt, b: Pt) {
 }
 
 function pointInPolygon(p: Pt, poly: Pt[]) {
-  // Ray-casting algorithm
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const xi = poly[i].x,
@@ -79,14 +61,12 @@ function pointInPolygon(p: Pt, poly: Pt[]) {
 function inwardNormalForSegment(a: Pt, b: Pt, poly: Pt[]) {
   let { nx, ny } = segmentNormal(a, b);
 
-  // probe near segment midpoint
   const mx = (a.x + b.x) / 2;
   const my = (a.y + b.y) / 2;
 
   const eps = 1;
   const test = { x: mx + nx * eps, y: my + ny * eps };
 
-  // flip if test point goes outside polygon
   if (!pointInPolygon(test, poly)) {
     nx = -nx;
     ny = -ny;
@@ -100,13 +80,10 @@ function degToRad(a: number) {
 }
 
 function doorLeafClosedAngle(baseWallAngle: number, hinge: "start" | "end") {
-  // start hinge: leaf points along wall direction
-  // end hinge:   leaf points opposite wall direction
   return hinge === "start" ? baseWallAngle : baseWallAngle + 180;
 }
 
 function doorLeafOpenAngle(leafClosedAngle: number, hinge: "start" | "end") {
-  // start hinge swings +90, end hinge swings -90
   return hinge === "start" ? leafClosedAngle + 90 : leafClosedAngle - 90;
 }
 
@@ -141,7 +118,6 @@ function upsertDoorArcPath(
   const x2 = hingePt.x + Math.cos(endRad) * radius;
   const y2 = hingePt.y + Math.sin(endRad) * radius;
 
-  // SVG arc: M x1 y1 A r r 0 0 sweep x2 y2
   const d = `M ${x1} ${y1} A ${radius} ${radius} 0 0 ${sweepFlag} ${x2} ${y2}`;
 
   const existing = getDoorArc(canvas, doorId);
@@ -192,7 +168,6 @@ function syncDoorArcForDoor(obj: any, room: Polygon) {
   const s = segs[segIndex];
   const baseAngle = segmentAngleDeg(s.a, s.b);
 
-  // hinge world point on wall, inset inward
   const hx0 = s.a.x + (s.b.x - s.a.x) * t;
   const hy0 = s.a.y + (s.b.y - s.a.y) * t;
 
@@ -200,13 +175,11 @@ function syncDoorArcForDoor(obj: any, room: Polygon) {
   const hx = hx0 + nx * DOOR_INSET;
   const hy = hy0 + ny * DOOR_INSET;
 
-  // radius = door leaf length (use current scaled width)
   const radius = Math.max(4, Number(obj.getScaledWidth?.() ?? obj.width ?? 0));
 
   const leafClosed = doorLeafClosedAngle(baseAngle, hinge);
   const leafOpen = doorLeafOpenAngle(leafClosed, hinge);
 
-  // start hinge swings +90 => sweep 1, end hinge swings -90 => sweep 0
   const sweep: 0 | 1 = hinge === "start" ? 1 : 0;
 
   upsertDoorArcPath(
@@ -224,11 +197,6 @@ export function isOpening(obj: any) {
   return obj?.data?.kind === "opening";
 }
 
-/**
- * Snap opening to nearest wall.
- * - windows: use center projection (with offset)
- * - doors: use hinge-point projection, and inset inside room (DOOR_INSET)
- */
 export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
 
@@ -242,7 +210,6 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     obj.data?.hinge === "end" ? ("end" as const) : ("start" as const);
   const isOpen = !!obj.data?.isOpen;
 
-  // === WINDOW / non-door: center projection ===
   if (!isDoor) {
     const c = obj.getCenterPoint();
     const p = { x: c.x, y: c.y };
@@ -295,7 +262,6 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     return;
   }
 
-  // === DOOR: hinge projection ===
   const hingePt = obj.getPointByOrigin(
     hinge === "start" ? "left" : "right",
     "center"
@@ -329,7 +295,6 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   const baseAngle = segmentAngleDeg(bestDoor.a, bestDoor.b);
   const openAngle = hinge === "start" ? baseAngle + 90 : baseAngle - 90;
 
-  // always inset INSIDE polygon
   const { nx, ny } = inwardNormalForSegment(bestDoor.a, bestDoor.b, poly);
 
   const insetX = bestDoor.q.x + nx * (DOOR_INSET + prevOffset);
@@ -349,7 +314,6 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
 
   obj.setCoords();
 
-  // store attachment (segment + t)
   obj.data = {
     ...(obj.data ?? {}),
     kind: "opening",
@@ -361,11 +325,6 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   syncDoorArcForDoor(obj, room);
 }
 
-/**
- * When room shape changes, keep openings attached:
- * - windows: center on wall + offset
- * - doors: hinge on wall + inset
- */
 export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
   const { segs, poly } = segsFromRoom(room);
   if (segs.length < 3) return;
@@ -410,7 +369,6 @@ export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
       return;
     }
 
-    // door hinge point = wall point inset inward (+offset if any)
     const px = wallX + nx * (DOOR_INSET + offset);
     const py = wallY + ny * (DOOR_INSET + offset);
 
