@@ -80,10 +80,11 @@ export type OpeningSnapshot = {
     kind: "opening";
     type: OpeningType;
     id: string;
-
     segIndex: number;
     t: number;
     offset: number;
+    hinge: "start" | "end";
+    isOpen: boolean;
   };
 };
 

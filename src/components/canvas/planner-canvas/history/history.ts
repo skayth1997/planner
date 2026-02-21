@@ -1,4 +1,3 @@
-// src/components/canvas/planner-canvas/history/history.ts
 import type { Canvas, Rect, Polygon } from "fabric";
 import { Rect as FabricRect } from "fabric";
 
@@ -26,60 +25,64 @@ export function serializeState(canvas: Canvas) {
     .filter(
       (o: any) => o?.data?.kind === "furniture" || o?.data?.kind === "opening"
     )
-    .map((o: any): CanvasSnapshotItem => {
-      // ===== Furniture =====
-      if (o?.data?.kind === "furniture") {
-        const snap: FurnitureSnapshot = {
+    .map(
+      (o: any): CanvasSnapshotItem => {
+        // ===== Furniture =====
+        if (o?.data?.kind === "furniture") {
+          const snap: FurnitureSnapshot = {
+            left: o.left ?? 0,
+            top: o.top ?? 0,
+            width: o.width ?? 0,
+            height: o.height ?? 0,
+            angle: o.angle ?? 0,
+            rx: o.rx,
+            ry: o.ry,
+            fill: o.fill,
+            stroke: o.stroke,
+            strokeWidth: o.strokeWidth ?? 2,
+            scaleX: o.scaleX ?? 1,
+            scaleY: o.scaleY ?? 1,
+            data: {
+              kind: "furniture",
+              type: o.data?.type ?? "unknown",
+              id: o.data?.id ?? makeId(),
+              baseStroke: o.data?.baseStroke ?? o.stroke ?? "#10b981",
+              baseStrokeWidth: o.data?.baseStrokeWidth ?? o.strokeWidth ?? 2,
+            },
+          };
+
+          return snap;
+        }
+
+        // ===== Opening (door/window) =====
+        const open: OpeningSnapshot = {
           left: o.left ?? 0,
           top: o.top ?? 0,
           width: o.width ?? 0,
           height: o.height ?? 0,
           angle: o.angle ?? 0,
-          rx: o.rx,
-          ry: o.ry,
           fill: o.fill,
           stroke: o.stroke,
           strokeWidth: o.strokeWidth ?? 2,
           scaleX: o.scaleX ?? 1,
           scaleY: o.scaleY ?? 1,
           data: {
-            kind: "furniture",
-            type: o.data?.type ?? "unknown",
+            kind: "opening",
+            type: o.data?.type ?? "door",
             id: o.data?.id ?? makeId(),
-            baseStroke: o.data?.baseStroke ?? o.stroke ?? "#10b981",
-            baseStrokeWidth: o.data?.baseStrokeWidth ?? o.strokeWidth ?? 2,
-          },
+            segIndex: Number(o.data?.segIndex) || 0,
+            t: typeof o.data?.t === "number" ? o.data.t : 0.5,
+            offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
+
+            hinge: o.data?.hinge === "end" ? "end" : "start",
+            isOpen: !!o.data?.isOpen,
+          } as any,
         };
 
-        return snap;
+        return open;
       }
+    );
 
-      // ===== Opening (door/window) =====
-      const open: OpeningSnapshot = {
-        left: o.left ?? 0,
-        top: o.top ?? 0,
-        width: o.width ?? 0,
-        height: o.height ?? 0,
-        angle: o.angle ?? 0,
-        fill: o.fill,
-        stroke: o.stroke,
-        strokeWidth: o.strokeWidth ?? 2,
-        scaleX: o.scaleX ?? 1,
-        scaleY: o.scaleY ?? 1,
-        data: {
-          kind: "opening",
-          type: o.data?.type ?? "door",
-          id: o.data?.id ?? makeId(),
-          segIndex: Number(o.data?.segIndex) || 0,
-          t: typeof o.data?.t === "number" ? o.data.t : 0.5,
-          offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
-        },
-      };
-
-      return open;
-    });
-
-  // stable ordering
   items.sort((a: any, b: any) => {
     const ida = a?.data?.id ?? "";
     const idb = b?.data?.id ?? "";
@@ -99,23 +102,16 @@ function safeParseItems(json: string): CanvasSnapshotItem[] {
   }
 }
 
-/**
- * Restore furniture + openings from items-only JSON array.
- * IMPORTANT: room is Polygon now, but for furniture we keep the old AABB clamp + snap for MVP.
- * Openings get re-snapped to nearest wall to ensure correct attachment.
- */
 export function restoreFromJson(
   canvas: Canvas,
   room: Rect | Polygon,
   json: string,
   onClearSelection: () => void
 ) {
-  // Batch mode: prevent a render per add/remove
   const prevRenderOnAddRemove = (canvas as any).renderOnAddRemove;
   (canvas as any).renderOnAddRemove = false;
 
   try {
-    // remove furniture + openings only
     const objects = canvas.getObjects().slice();
     for (const o of objects as any[]) {
       if (isFurniture(o) || isOpening(o)) canvas.remove(o);
@@ -161,7 +157,6 @@ export function restoreFromJson(
 
         canvas.add(rect);
 
-        // keep MVP constraints
         clampFurnitureInsideRoom(rect as any, room as any);
         snapFurnitureToRoomGrid(rect as any, room as any, GRID_SIZE);
         rect.setCoords();
@@ -169,9 +164,16 @@ export function restoreFromJson(
         continue;
       }
 
-      // ===== opening =====
       if ((s as any)?.data?.kind === "opening") {
         const o = s as OpeningSnapshot;
+
+        const type = (o as any)?.data?.type ?? "door";
+        const isDoor = type === "door";
+
+        const hinge =
+          (o as any)?.data?.hinge === "end"
+            ? ("end" as const)
+            : ("start" as const);
 
         const rect = new FabricRect({
           left: o.left,
@@ -180,11 +182,10 @@ export function restoreFromJson(
           height: o.height,
           fill:
             o.fill ??
-            (o.data?.type === "window"
+            (type === "window"
               ? "rgba(59,130,246,0.18)"
               : "rgba(245,158,11,0.25)"),
-          stroke:
-            o.stroke ?? (o.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
+          stroke: o.stroke ?? (type === "window" ? "#3b82f6" : "#f59e0b"),
           strokeWidth: o.strokeWidth ?? 2,
           selectable: true,
           evented: true,
@@ -194,7 +195,7 @@ export function restoreFromJson(
           transparentCorners: false,
           angle: o.angle ?? 0,
           hoverCursor: "move",
-          originX: "center",
+          originX: isDoor ? (hinge === "start" ? "left" : "right") : "center",
           originY: "center",
         });
 
@@ -203,16 +204,21 @@ export function restoreFromJson(
 
         (rect as any).data = {
           kind: "opening",
-          type: o.data?.type ?? "door",
-          id: o.data?.id ?? makeId(),
-          segIndex: Number(o.data?.segIndex) || 0,
-          t: typeof o.data?.t === "number" ? o.data.t : 0.5,
-          offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
+          type,
+          id: (o as any)?.data?.id ?? makeId(),
+          segIndex: Number((o as any)?.data?.segIndex) || 0,
+          t: typeof (o as any)?.data?.t === "number" ? (o as any).data.t : 0.5,
+          offset:
+            typeof (o as any)?.data?.offset === "number"
+              ? (o as any).data.offset
+              : 0,
+
+          hinge,
+          isOpen: !!(o as any)?.data?.isOpen,
         };
 
         canvas.add(rect);
 
-        // Ensure correct wall attachment after restore
         if ((room as any)?.points) {
           snapOpeningToNearestWall(rect as any, room as any);
         }
@@ -224,7 +230,6 @@ export function restoreFromJson(
     canvas.discardActiveObject();
     onClearSelection();
   } finally {
-    // restore setting + render once
     (canvas as any).renderOnAddRemove = prevRenderOnAddRemove ?? true;
     canvas.requestRenderAll();
   }
