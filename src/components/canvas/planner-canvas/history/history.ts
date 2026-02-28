@@ -15,10 +15,6 @@ import {
 import { isFurniture, makeId } from "../core/utils";
 import { isOpening, snapOpeningToNearestWall } from "../openings/openings";
 
-/**
- * Serialize furniture + openings into a single JSON array (items-only).
- * Room points are saved separately by persistence.ts (or autosaveExtra hook).
- */
 export function serializeState(canvas: Canvas) {
   const items = canvas
     .getObjects()
@@ -27,7 +23,6 @@ export function serializeState(canvas: Canvas) {
     )
     .map(
       (o: any): CanvasSnapshotItem => {
-        // ===== Furniture =====
         if (o?.data?.kind === "furniture") {
           const snap: FurnitureSnapshot = {
             left: o.left ?? 0,
@@ -54,7 +49,6 @@ export function serializeState(canvas: Canvas) {
           return snap;
         }
 
-        // ===== Opening (door/window) =====
         const open: OpeningSnapshot = {
           left: o.left ?? 0,
           top: o.top ?? 0,
@@ -70,10 +64,10 @@ export function serializeState(canvas: Canvas) {
             kind: "opening",
             type: o.data?.type ?? "door",
             id: o.data?.id ?? makeId(),
-            segIndex: Number(o.data?.segIndex) || 0,
+            wallId:
+              typeof o.data?.wallId === "string" ? o.data.wallId : "seg-0",
             t: typeof o.data?.t === "number" ? o.data.t : 0.5,
             offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
-
             hinge: o.data?.hinge === "end" ? "end" : "start",
             isOpen: !!o.data?.isOpen,
           } as any,
@@ -120,7 +114,6 @@ export function restoreFromJson(
     const data = safeParseItems(json);
 
     for (const s of data) {
-      // ===== furniture =====
       if ((s as any)?.data?.kind === "furniture") {
         const f = s as FurnitureSnapshot;
 
@@ -202,11 +195,28 @@ export function restoreFromJson(
         rect.scaleX = o.scaleX ?? 1;
         rect.scaleY = o.scaleY ?? 1;
 
+        const wallId =
+          typeof (o as any)?.data?.wallId === "string"
+            ? String((o as any).data.wallId)
+            : undefined;
+
+        const legacySegIndex = Number.isFinite(
+          Number((o as any)?.data?.segIndex)
+        )
+          ? Number((o as any).data.segIndex)
+          : undefined;
+
         (rect as any).data = {
           kind: "opening",
           type,
           id: (o as any)?.data?.id ?? makeId(),
-          segIndex: Number((o as any)?.data?.segIndex) || 0,
+
+          wallId:
+            wallId ??
+            (typeof legacySegIndex === "number"
+              ? `seg-${legacySegIndex}`
+              : "seg-0"),
+
           t: typeof (o as any)?.data?.t === "number" ? (o as any).data.t : 0.5,
           offset:
             typeof (o as any)?.data?.offset === "number"

@@ -3,24 +3,24 @@ import { Rect, Point, Path } from "fabric";
 import { makeId } from "../core/utils";
 import { projectPointToSegment } from "./wall-math";
 import { getRoomPoints } from "../room/room-walls";
-
-type Pt = { x: number; y: number };
-
+import type { Pt, WallSeg } from "../core/planner-types";
 const DOOR_INSET = 12;
 
-function segsFromRoom(room: Polygon) {
-  const pts = getRoomPoints(room) as Pt[];
-  const poly: Pt[] = pts.map((p) => ({
+function wallsFromRoom(room: Polygon) {
+  const pts = (getRoomPoints(room) as Pt[]).map((p) => ({
     x: Number(p.x) || 0,
     y: Number(p.y) || 0,
   }));
 
-  const segs: Array<{ a: Pt; b: Pt }> = [];
+  const poly: Pt[] = pts;
+
+  const segs: WallSeg[] = [];
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i];
     const b = poly[(i + 1) % poly.length];
-    segs.push({ a, b });
+    segs.push({ id: `seg-${i}`, a, b });
   }
+
   return { poly, segs };
 }
 
@@ -140,6 +140,24 @@ function upsertDoorArcPath(
   arc.setCoords();
 }
 
+function ensureWallId(obj: any, segs: WallSeg[]) {
+  const hasWallId = typeof obj?.data?.wallId === "string" && obj.data.wallId;
+  if (hasWallId) return;
+
+  const segIndex = Number(obj?.data?.segIndex);
+  if (!Number.isFinite(segIndex)) return;
+
+  const idx = Math.max(0, Math.min(segs.length - 1, segIndex));
+  obj.data = {
+    ...(obj.data ?? {}),
+    wallId: segs[idx]?.id ?? `seg-${idx}`,
+  };
+}
+
+function findWall(segs: WallSeg[], wallId: string) {
+  return segs.find((s) => s.id === wallId) ?? null;
+}
+
 function syncDoorArcForDoor(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
   if (obj.data?.type !== "door") return;
@@ -156,16 +174,17 @@ function syncDoorArcForDoor(obj: any, room: Polygon) {
     return;
   }
 
-  const segIndex = Number(obj.data?.segIndex);
   const t = clamp01(Number(obj.data?.t));
   const hinge =
     obj.data?.hinge === "end" ? ("end" as const) : ("start" as const);
 
-  const { segs, poly } = segsFromRoom(room);
-  if (!Number.isFinite(segIndex) || segIndex < 0 || segIndex >= segs.length)
-    return;
+  const { segs, poly } = wallsFromRoom(room);
+  ensureWallId(obj, segs);
 
-  const s = segs[segIndex];
+  const wallId = String(obj.data?.wallId || "");
+  const s = findWall(segs, wallId);
+  if (!s) return;
+
   const baseAngle = segmentAngleDeg(s.a, s.b);
 
   const hx0 = s.a.x + (s.b.x - s.a.x) * t;
@@ -200,8 +219,10 @@ export function isOpening(obj: any) {
 export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
 
-  const { segs, poly } = segsFromRoom(room);
+  const { segs, poly } = wallsFromRoom(room);
   if (segs.length < 3) return;
+
+  ensureWallId(obj, segs);
 
   const prevOffset = typeof obj.data?.offset === "number" ? obj.data.offset : 0;
 
@@ -215,7 +236,7 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     const p = { x: c.x, y: c.y };
 
     let best = {
-      segIndex: 0,
+      wallId: segs[0].id,
       t: 0,
       d2: Number.POSITIVE_INFINITY,
       q: { x: 0, y: 0 },
@@ -223,12 +244,11 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
       b: segs[0].b,
     };
 
-    for (let i = 0; i < segs.length; i++) {
-      const s = segs[i];
+    for (const s of segs) {
       const proj = projectPointToSegment(p, s.a, s.b);
       if (proj.d2 < best.d2) {
         best = {
-          segIndex: i,
+          wallId: s.id,
           t: proj.t,
           d2: proj.d2,
           q: proj.q,
@@ -254,9 +274,10 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     obj.data = {
       ...(obj.data ?? {}),
       kind: "opening",
-      segIndex: best.segIndex,
+      wallId: best.wallId,
       t: best.t,
       offset: prevOffset,
+      segIndex: undefined,
     };
 
     return;
@@ -269,7 +290,7 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   const hp = { x: hingePt.x, y: hingePt.y };
 
   let bestDoor = {
-    segIndex: 0,
+    wallId: segs[0].id,
     t: 0,
     d2: Number.POSITIVE_INFINITY,
     q: { x: 0, y: 0 },
@@ -277,12 +298,11 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     b: segs[0].b,
   };
 
-  for (let i = 0; i < segs.length; i++) {
-    const s = segs[i];
+  for (const s of segs) {
     const proj = projectPointToSegment(hp, s.a, s.b);
     if (proj.d2 < bestDoor.d2) {
       bestDoor = {
-        segIndex: i,
+        wallId: s.id,
         t: proj.t,
         d2: proj.d2,
         q: proj.q,
@@ -317,32 +337,33 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   obj.data = {
     ...(obj.data ?? {}),
     kind: "opening",
-    segIndex: bestDoor.segIndex,
+    wallId: bestDoor.wallId,
     t: bestDoor.t,
     offset: prevOffset,
+    segIndex: undefined,
   };
 
   syncDoorArcForDoor(obj, room);
 }
 
 export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
-  const { segs, poly } = segsFromRoom(room);
+  const { segs, poly } = wallsFromRoom(room);
   if (segs.length < 3) return;
 
   canvas.getObjects().forEach((o: any) => {
     if (!isOpening(o)) return;
 
-    const segIndex = Number(o.data?.segIndex);
-    const t = clamp01(Number(o.data?.t));
-    const offset = Number(o.data?.offset) || 0;
+    ensureWallId(o, segs);
 
-    const idx = Number.isFinite(segIndex) ? segIndex : -1;
-    if (idx < 0 || idx >= segs.length) {
+    const wallId = String(o.data?.wallId || "");
+    const s = findWall(segs, wallId);
+    if (!s) {
       snapOpeningToNearestWall(o, room);
       return;
     }
 
-    const s = segs[idx];
+    const t = clamp01(Number(o.data?.t));
+    const offset = Number(o.data?.offset) || 0;
 
     const wallX = s.a.x + (s.b.x - s.a.x) * t;
     const wallY = s.a.y + (s.b.y - s.a.y) * t;
@@ -431,7 +452,7 @@ export function addDoor(canvas: Canvas, room: Polygon) {
     kind: "opening",
     type: "door",
     id: makeId(),
-    segIndex: 0,
+    wallId: "seg-0",
     t: 0.5,
     offset: 0,
     isOpen: false,
@@ -466,7 +487,7 @@ export function addWindow(canvas: Canvas, room: Polygon) {
     kind: "opening",
     type: "window",
     id: makeId(),
-    segIndex: 0,
+    wallId: "seg-0",
     t: 0.5,
     offset: 0,
   };

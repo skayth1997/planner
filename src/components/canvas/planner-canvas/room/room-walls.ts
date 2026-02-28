@@ -11,7 +11,6 @@ function clamp(n: number, min: number, max: number) {
 }
 
 export function createRoomPolygon(canvas: Canvas) {
-  // initial rectangle (same position as old Rect)
   const pts: RoomPoint[] = [
     { x: 200, y: 150 },
     { x: 800, y: 150 },

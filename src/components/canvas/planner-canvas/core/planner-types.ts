@@ -6,8 +6,10 @@ export type OpeningType = "door" | "window";
 export type OpeningKind = "door" | "window";
 
 export type OpeningData = {
+  kind?: "opening";
   type: OpeningKind;
-  wallIndex?: number;
+  wallId?: WallId;
+  segIndex?: number;
   t?: number;
   offset?: number;
   hinge?: "start" | "end";
@@ -25,6 +27,8 @@ export type SelectedInfo = {
   angle: number;
   hinge?: "start" | "end";
   isOpen?: boolean;
+  wallId?: string;
+  t?: number;
 };
 
 export type RoomSize = { width: number; height: number };
@@ -91,18 +95,29 @@ export type OpeningSnapshot = {
     kind: "opening";
     type: OpeningType;
     id: string;
-    segIndex: number;
+    wallId: string;
     t: number;
     offset: number;
-    hinge: "start" | "end";
-    isOpen: boolean;
+    hinge?: "start" | "end";
+    isOpen?: boolean;
+    segIndex?: number;
   };
 };
 
 export type CanvasSnapshotItem = FurnitureSnapshot | OpeningSnapshot;
 
-export type PlanSnapshotV4 = {
-  version: 4;
+export type PlanSnapshotV5 = {
+  version: 5;
   room: { points: { x: number; y: number }[] };
   items: CanvasSnapshotItem[];
+};
+
+export type WallId = string;
+
+export type Pt = { x: number; y: number };
+
+export type WallSeg = {
+  id: string;
+  a: Pt;
+  b: Pt;
 };
