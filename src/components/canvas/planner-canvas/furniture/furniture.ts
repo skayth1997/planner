@@ -11,13 +11,10 @@ import {
   polygonCentroid,
 } from "../room/polygon-geometry";
 
-/**
- * This assumes room.points are stored in absolute canvas coords (your current approach).
- * If you ever switch to local coords, update this to add room.left/top transform.
- */
+import { getRoomPoints } from "../room/room-walls";
+
 function getRoomPolygonPoints(room: any) {
-  const pts = (room.points ?? []) as any[];
-  return pts.map((p) => ({ x: p.x, y: p.y }));
+  return getRoomPoints(room);
 }
 
 function getRoomInnerAABB(room: any) {
@@ -30,13 +27,16 @@ function getRoomInnerAABB(room: any) {
   const right = r.left + r.width - inset;
   const bottom = r.top + r.height - inset;
 
-  return { left, top, right, bottom, width: right - left, height: bottom - top };
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
-/**
- * Center-based polygon clamp (fast). Keeps center inside polygon.
- * Good for moving, but not sufficient for rotated/large objects (corners can escape).
- */
 export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
   if (!obj?.data || obj.data.kind !== "furniture") return;
 
@@ -50,7 +50,6 @@ export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
 
   const nearest = nearestPointOnPolygon(p, poly);
 
-  // Nudge slightly inside (towards polygon centroid)
   const c = polygonCentroid(poly);
   let vx = c.x - nearest.x;
   let vy = c.y - nearest.y;
@@ -58,7 +57,7 @@ export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
   vx /= len;
   vy /= len;
 
-  const EPS = 2; // px inward
+  const EPS = 2;
   const target = { x: nearest.x + vx * EPS, y: nearest.y + vy * EPS };
 
   const dx = target.x - p.x;
@@ -69,12 +68,10 @@ export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
   obj.setCoords();
 }
 
-/**
- * Rotation-safe polygon clamp (corner-based).
- * Ensures ALL 4 corners of the rotated rect stay inside polygon by translating it.
- * Use this on rotate end / object:modified for the best feel.
- */
-export function clampFurnitureInsideRoomPolygonByCorners(obj: any, room: Polygon) {
+export function clampFurnitureInsideRoomPolygonByCorners(
+  obj: any,
+  room: Polygon
+) {
   if (!isFurniture(obj)) return;
 
   const poly = getRoomPolygonPoints(room);
@@ -83,10 +80,8 @@ export function clampFurnitureInsideRoomPolygonByCorners(obj: any, room: Polygon
   const corners = obj.getCoords?.() as { x: number; y: number }[] | undefined;
   if (!corners || corners.length < 4) return;
 
-  // all corners inside -> ok
   if (corners.every((c) => pointInPolygon(c, poly))) return;
 
-  // Find the "worst" outside corner and push it to nearest edge point
   let moveX = 0;
   let moveY = 0;
   let bestD2 = -1;
@@ -114,13 +109,11 @@ export function clampFurnitureInsideRoomPolygonByCorners(obj: any, room: Polygon
   obj.setCoords();
 }
 
-/**
- * Size limiter (BBox-based): prevents furniture from becoming bigger than room inner AABB.
- * Works best for axis-aligned rooms. For rotated furniture, this limits the bounding box.
- *
- * Call during scaling (optional) and/or after modified (recommended).
- */
-export function limitFurnitureSizeToRoomBBox(obj: any, room: any, gridSize: number) {
+export function limitFurnitureSizeToRoomBBox(
+  obj: any,
+  room: any,
+  gridSize: number
+) {
   if (!isFurniture(obj)) return;
 
   obj.setCoords();
@@ -128,22 +121,17 @@ export function limitFurnitureSizeToRoomBBox(obj: any, room: any, gridSize: numb
   const box = getRoomInnerAABB(room);
   const r = obj.getBoundingRect(false, true);
 
-  // If already fits, nothing to do
   if (r.width <= box.width && r.height <= box.height) return;
 
-  // Scale down uniformly to fit bbox
   const kx = box.width / Math.max(1, r.width);
   const ky = box.height / Math.max(1, r.height);
   const k = Math.min(kx, ky);
 
-  // Keep center stable
   const center = obj.getCenterPoint();
 
   obj.scaleX = (obj.scaleX ?? 1) * k;
   obj.scaleY = (obj.scaleY ?? 1) * k;
 
-  // Optional: snap scaled size to grid (coarse, but consistent)
-  // We do it by snapping the *scaled* size, then recomputing scale factors.
   if (gridSize > 1) {
     const sw = obj.getScaledWidth();
     const sh = obj.getScaledHeight();
@@ -250,7 +238,6 @@ export function addFurniture(canvas: Canvas, room: any, type: FurnitureType) {
 
   canvas.add(obj);
 
-  // Initial safety
   clampFurnitureInsideRoom(obj as any, room);
   snapFurnitureToRoomGrid(obj as any, room, GRID_SIZE);
 

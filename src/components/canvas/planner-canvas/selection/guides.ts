@@ -11,7 +11,6 @@ type GuidePair = {
 };
 
 function ensureGuidePair(canvas: Canvas, guidesRef: { current: GuideLine[] }) {
-  // We store 2 lines in guidesRef.current: [v, h]
   if (guidesRef.current.length === 2) {
     return {
       v: guidesRef.current[0],
@@ -20,7 +19,6 @@ function ensureGuidePair(canvas: Canvas, guidesRef: { current: GuideLine[] }) {
     } as GuidePair;
   }
 
-  // Create once
   const v = new Line([0, 0, 0, 0], {
     stroke: "#2563eb",
     strokeWidth: 2,
@@ -44,7 +42,6 @@ function ensureGuidePair(canvas: Canvas, guidesRef: { current: GuideLine[] }) {
   canvas.add(v);
   canvas.add(h);
 
-  // Keep them on top
   canvas.bringObjectToFront(v);
   canvas.bringObjectToFront(h);
 
@@ -57,7 +54,6 @@ export function clearGuides(
   canvas: Canvas,
   guidesRef: { current: GuideLine[] }
 ) {
-  // Instead of removing objects, just hide them
   if (guidesRef.current.length !== 2) return;
   const [v, h] = guidesRef.current;
   v.set({ visible: false });
@@ -133,11 +129,9 @@ export function alignAndGuide(
   let bestDxAbs = Number.POSITIVE_INFINITY;
   let bestDyAbs = Number.POSITIVE_INFINITY;
 
-  // Best guide candidates (object-object)
   let bestV: null | { x: number; y1: number; y2: number } = null;
   let bestH: null | { y: number; x1: number; x2: number } = null;
 
-  // Room guides ONLY (do not affect movement)
   let roomBestDxAbs = Number.POSITIVE_INFINITY;
   let roomBestDyAbs = Number.POSITIVE_INFINITY;
   let roomBestV: null | { x: number; y1: number; y2: number } = null;
@@ -146,7 +140,6 @@ export function alignAndGuide(
   const candidatesX = [mv.left, mv.cx, mv.right];
   const candidatesY = [mv.top, mv.cy, mv.bottom];
 
-  // ---- room guides only (NO moving.set here) ----
   for (const cX of candidatesX) {
     for (const tX of roomTargetsX) {
       const s = snapValue(cX, tX, TOL);
@@ -211,7 +204,6 @@ export function alignAndGuide(
 
   moving.setCoords();
 
-  // If no object-object guide, fall back to room guides
   if (!bestV && roomBestV) bestV = roomBestV;
   if (!bestH && roomBestH) bestH = roomBestH;
 
@@ -221,7 +213,6 @@ export function alignAndGuide(
   if (bestH) updateH(h, bestH.y, bestH.x1, bestH.x2);
   else hide(h);
 
-  // keep on top
   canvas.bringObjectToFront(v);
   canvas.bringObjectToFront(h);
 }
