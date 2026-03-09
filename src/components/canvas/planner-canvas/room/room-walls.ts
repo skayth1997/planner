@@ -1,4 +1,4 @@
-import { Polygon, Circle, Canvas } from "fabric";
+import { Polygon, Circle, Canvas, Point } from "fabric";
 
 export type RoomPoint = { x: number; y: number };
 
@@ -6,19 +6,52 @@ function snap(v: number, grid: number) {
   return Math.round(v / grid) * grid;
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function normalizeRoomPoints(points: RoomPoint[]) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+
+  const localPoints = points.map((p) => ({
+    x: p.x - minX,
+    y: p.y - minY,
+  }));
+
+  return {
+    left: minX,
+    top: minY,
+    width,
+    height,
+    localPoints,
+  };
 }
 
 export function createRoomPolygon(canvas: Canvas) {
-  const pts: RoomPoint[] = [
+  const absolutePoints: RoomPoint[] = [
     { x: 200, y: 150 },
     { x: 800, y: 150 },
     { x: 800, y: 550 },
     { x: 200, y: 550 },
   ];
 
-  const room = new Polygon(pts as any, {
+  const { left, top, width, height, localPoints } =
+    normalizeRoomPoints(absolutePoints);
+
+  const room = new Polygon(localPoints as any, {
+    left,
+    top,
+    originX: "left",
+    originY: "top",
+    width,
+    height,
+    pathOffset: new Point(width / 2, height / 2),
+
     fill: "rgba(59,130,246,0.15)",
     stroke: "#3b82f6",
     strokeWidth: 3,
@@ -34,13 +67,41 @@ export function createRoomPolygon(canvas: Canvas) {
   return room;
 }
 
+/**
+ * Always return ABSOLUTE canvas points.
+ */
 export function getRoomPoints(room: Polygon): RoomPoint[] {
   const pts = (room.points ?? []) as any[];
-  return pts.map((p) => ({ x: p.x, y: p.y }));
+  const left = Number(room.left) || 0;
+  const top = Number(room.top) || 0;
+
+  return pts.map((p) => ({
+    x: left + (Number(p.x) || 0),
+    y: top + (Number(p.y) || 0),
+  }));
 }
 
+/**
+ * Accept ABSOLUTE canvas points and store them properly as
+ * local polygon points + left/top bbox.
+ */
 export function setRoomPoints(room: Polygon, points: RoomPoint[]) {
-  room.set({ points: points as any });
+  if (!points.length) return;
+
+  const { left, top, width, height, localPoints } =
+    normalizeRoomPoints(points);
+
+  room.set({
+    left,
+    top,
+    originX: "left",
+    originY: "top",
+    width,
+    height,
+    points: localPoints as any,
+    pathOffset: new Point(width / 2, height / 2),
+  });
+
   room.setCoords();
 }
 
@@ -81,10 +142,15 @@ export function createCornerHandles(canvas: Canvas, room: Polygon) {
 
 export function syncHandlesToRoom(handles: Circle[], room: Polygon) {
   const pts = getRoomPoints(room);
+
   handles.forEach((h, i) => {
     const p = pts[i];
     if (!p) return;
-    h.set({ left: p.x, top: p.y });
+
+    h.set({
+      left: p.x,
+      top: p.y,
+    });
     h.setCoords();
   });
 }
@@ -94,14 +160,13 @@ type AttachArgs = {
   room: Polygon;
   handles: Circle[];
   gridSize: number;
-  minSize?: number; // bbox min w/h
+  minSize?: number;
   onRoomChanging?: () => void;
   onRoomChanged?: () => void;
 };
 
 export function attachWallEditing(args: AttachArgs) {
   const {
-    canvas,
     room,
     handles,
     gridSize,
@@ -111,14 +176,23 @@ export function attachWallEditing(args: AttachArgs) {
   } = args;
 
   const getAABB = () => {
-    const r = room.getBoundingRect();
+    const pts = getRoomPoints(room);
+
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+
+    const left = Math.min(...xs);
+    const top = Math.min(...ys);
+    const right = Math.max(...xs);
+    const bottom = Math.max(...ys);
+
     return {
-      left: r.left,
-      top: r.top,
-      right: r.left + r.width,
-      bottom: r.top + r.height,
-      width: r.width,
-      height: r.height,
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
     };
   };
 
@@ -128,21 +202,17 @@ export function attachWallEditing(args: AttachArgs) {
 
       const pts = getRoomPoints(room);
 
-      // snap handle to grid (center-based)
       let nx = h.left ?? 0;
       let ny = h.top ?? 0;
 
       nx = snap(nx, gridSize);
       ny = snap(ny, gridSize);
 
-      // Apply snapped coords to handle immediately (visual consistency)
       h.set({ left: nx, top: ny });
       h.setCoords();
 
-      // Update room point
       pts[idx] = { x: nx, y: ny };
 
-      // Keep bbox not collapsing below minSize (simple MVP constraint)
       const xs = pts.map((p) => p.x);
       const ys = pts.map((p) => p.y);
       const minX = Math.min(...xs);
@@ -154,17 +224,15 @@ export function attachWallEditing(args: AttachArgs) {
       const height = maxY - minY;
 
       if (width < minSize || height < minSize) {
-        // revert this move a bit using previous aabb center idea
-        // simplest: clamp the moved point inside a huge safe range but try not to collapse
         const aabb = getAABB();
         const cx = (aabb.left + aabb.right) / 2;
         const cy = (aabb.top + aabb.bottom) / 2;
 
-        // push point away from center if too small
         if (width < minSize) {
           nx = nx < cx ? cx - minSize / 2 : cx + minSize / 2;
           nx = snap(nx, gridSize);
         }
+
         if (height < minSize) {
           ny = ny < cy ? cy - minSize / 2 : cy + minSize / 2;
           ny = snap(ny, gridSize);
