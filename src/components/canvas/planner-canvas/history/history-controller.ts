@@ -5,20 +5,15 @@ type Args = {
   storageKey: string;
   scheduleRender: () => void;
 
-  // serialization / restore are injected so controller stays dumb & reusable
   serialize: () => string;
   restore: (json: string) => void;
 
-  // called after restore (restyle, clear guides, restack, etc.)
   onAfterRestore?: () => void;
 
-  // optional: save extra state (ex: room points)
   autosaveExtra?: () => void;
 
-  // autosave debounce
   autosaveMs?: number;
 
-  // history limit
   limit?: number;
 };
 
@@ -76,7 +71,6 @@ export function createHistoryController(args: Args) {
     const next = history.slice(0, index + 1);
     next.push(snap);
 
-    // limit
     if (next.length > limit) {
       next.shift();
       index = Math.max(-1, index - 1);
@@ -121,12 +115,9 @@ export function createHistoryController(args: Args) {
         applySnapshot(saved);
         setHistory([saved], 0);
         return { loaded: true };
-      } catch {
-        // fallthrough to fresh init
-      }
+      } catch {}
     }
 
-    // fresh init
     const snap = serialize();
     setHistory([snap], 0);
     scheduleAutosave();
@@ -134,10 +125,6 @@ export function createHistoryController(args: Args) {
     return { loaded: false };
   };
 
-  /**
-   * Use this after load/import to reset undo/redo stack
-   * to a single known snapshot.
-   */
   const setHistoryFromSnapshot = (snap: string) => {
     setHistory([snap], 0);
     scheduleAutosave();

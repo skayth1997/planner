@@ -26,14 +26,12 @@ function isEditableTarget(target: any) {
   const tag = (el.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return true;
 
-  // contenteditable (incl. tiptap etc.)
   if ((el as any).isContentEditable) return true;
 
   return false;
 }
 
 function isMacPlatform() {
-  // good enough for shortcuts behavior
   return (
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad|iPod/i.test(navigator.platform)
@@ -59,88 +57,75 @@ export function attachKeyboardController(args: Args) {
   };
 
   const onWindowBlur = () => {
-    // important: prevents “stuck Space/Shift/Alt”
     clearMods();
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (isEditableTarget(e.target)) return;
 
-    // track modifier refs (global, consistent)
     if (e.key === " " || e.code === "Space") isSpacePressedRef.current = true;
     if (e.key === "Shift") isShiftPressedRef.current = true;
     if (e.key === "Alt") isAltPressedRef.current = true;
 
     const ctrlOrCmd = isMac ? e.metaKey : e.ctrlKey;
-    const anyCtrlCmd = e.ctrlKey || e.metaKey; // allow both, feels nicer
+    const anyCtrlCmd = e.ctrlKey || e.metaKey;
 
-    // ===== Shortcuts (Ctrl/⌘ behavior only) =====
     if (anyCtrlCmd) {
       const k = e.key.toLowerCase();
 
-      // copy
       if (k === "c") {
         e.preventDefault();
         actions.copySelected();
         return;
       }
 
-      // paste
       if (k === "v") {
         e.preventDefault();
         actions.paste();
         return;
       }
 
-      // undo
       if (k === "z" && !e.shiftKey) {
         e.preventDefault();
         actions.undo();
         return;
       }
 
-      // redo (⌘+Shift+Z on mac / ctrl+shift+z on win)
       if (k === "z" && e.shiftKey) {
         e.preventDefault();
         actions.redo();
         return;
       }
 
-      // redo (ctrl+y on windows)
       if (k === "y") {
         e.preventDefault();
         actions.redo();
         return;
       }
 
-      // let other ctrl/cmd combos pass through
       return;
     }
 
-    // ===== Delete =====
     if (e.key === "Backspace" || e.key === "Delete") {
       e.preventDefault();
       actions.deleteSelected();
       return;
     }
 
-    // ===== Layers ([ ]) =====
-    // ] => up, [ => down
     if (e.code === "BracketRight" || e.key === "]") {
       e.preventDefault();
-      const toEdge = e.shiftKey; // Shift+] => bring to front
+      const toEdge = e.shiftKey;
       actions.moveLayer("up", toEdge);
       return;
     }
 
     if (e.code === "BracketLeft" || e.key === "[") {
       e.preventDefault();
-      const toEdge = e.shiftKey; // Shift+[ => send to back
+      const toEdge = e.shiftKey;
       actions.moveLayer("down", toEdge);
       return;
     }
 
-    // ===== Nudging (arrows) =====
     const isArrow =
       e.key === "ArrowUp" ||
       e.key === "ArrowDown" ||
@@ -151,7 +136,7 @@ export function attachKeyboardController(args: Args) {
       e.preventDefault();
 
       const step = e.shiftKey ? getGridSize() : 1;
-      const skipClamp = e.altKey; // Alt => bypass constraints
+      const skipClamp = e.altKey;
 
       let dx = 0;
       let dy = 0;

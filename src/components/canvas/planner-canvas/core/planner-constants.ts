@@ -13,4 +13,4 @@ export const ACTIVE_STROKE_WIDTH = 3;
 export const HOVER_STROKE = "#2563eb";
 export const HOVER_STROKE_WIDTH = 3;
 
-export const ALIGN_SNAP_TOLERANCE = 8; // px
+export const ALIGN_SNAP_TOLERANCE = 8;

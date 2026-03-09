@@ -1,7 +1,6 @@
 export type Pt = { x: number; y: number };
 
 export function pointInPolygon(p: Pt, poly: Pt[]) {
-  // Ray casting
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const a = poly[i];
@@ -15,7 +14,6 @@ export function pointInPolygon(p: Pt, poly: Pt[]) {
 }
 
 export function polygonCentroid(poly: Pt[]) {
-  // Simple average centroid (good enough for convex-ish room)
   let x = 0,
     y = 0;
   for (const p of poly) {
