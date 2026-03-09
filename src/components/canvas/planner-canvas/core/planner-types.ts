@@ -1,13 +1,32 @@
-import type { Rect, Line } from "fabric";
+import type { Line } from "fabric";
 
 export type FurnitureType = "sofa" | "table" | "chair";
 export type OpeningType = "door" | "window";
-
 export type OpeningKind = "door" | "window";
+
+export type RoomId = string;
+export type WallId = string;
+
+export type Pt = { x: number; y: number };
+
+export type RoomSize = { width: number; height: number };
+
+export type RoomSnapshot = {
+  id: RoomId;
+  name?: string;
+  points: Pt[];
+};
+
+export type WallSeg = {
+  id: string;
+  a: Pt;
+  b: Pt;
+};
 
 export type OpeningData = {
   kind?: "opening";
   type: OpeningKind;
+  roomId?: RoomId;
   wallId?: WallId;
   segIndex?: number;
   t?: number;
@@ -18,8 +37,9 @@ export type OpeningData = {
 
 export type SelectedInfo = {
   id: string;
-  kind: "furniture" | "opening" | "unknown";
-  type: FurnitureType | OpeningType | "unknown";
+  kind: "furniture" | "opening" | "room" | "unknown";
+  type: FurnitureType | OpeningType | "room" | "unknown";
+  roomId?: RoomId;
   left: number;
   top: number;
   width: number;
@@ -30,8 +50,6 @@ export type SelectedInfo = {
   wallId?: string;
   t?: number;
 };
-
-export type RoomSize = { width: number; height: number };
 
 export type PlannerCanvasHandle = {
   addFurniture: (type: FurnitureType) => void;
@@ -57,6 +75,9 @@ export type PlannerCanvasHandle = {
   isDrawingRoom: () => boolean;
   startDrawRoom?: () => void;
   stopDrawRoom?: () => void;
+  addRoom?: () => void;
+  getActiveRoomId?: () => RoomId | null;
+  setActiveRoom?: (roomId: RoomId) => void;
 };
 
 export type FurnitureSnapshot = {
@@ -76,6 +97,7 @@ export type FurnitureSnapshot = {
     kind: "furniture";
     type: FurnitureType | "unknown";
     id: string;
+    roomId?: RoomId;
     baseStroke?: string;
     baseStrokeWidth?: number;
   };
@@ -98,6 +120,7 @@ export type OpeningSnapshot = {
     kind: "opening";
     type: OpeningType;
     id: string;
+    roomId?: RoomId;
     wallId: string;
     t: number;
     offset: number;
@@ -111,16 +134,15 @@ export type CanvasSnapshotItem = FurnitureSnapshot | OpeningSnapshot;
 
 export type PlanSnapshotV5 = {
   version: 5;
-  room: { points: { x: number; y: number }[] };
+  room: { points: Pt[] };
   items: CanvasSnapshotItem[];
 };
 
-export type WallId = string;
-
-export type Pt = { x: number; y: number };
-
-export type WallSeg = {
-  id: string;
-  a: Pt;
-  b: Pt;
+export type PlanSnapshotV6 = {
+  version: 6;
+  rooms: RoomSnapshot[];
+  items: CanvasSnapshotItem[];
+  activeRoomId?: RoomId | null;
 };
+
+export type PlanSnapshot = PlanSnapshotV5 | PlanSnapshotV6;
