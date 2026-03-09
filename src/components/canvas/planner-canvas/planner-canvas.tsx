@@ -46,13 +46,13 @@ import {
 } from "./persistence/persistence";
 
 import {
-  createRoomPolygon,
-  createCornerHandles,
+  createRoomRuntime,
   attachWallEditing,
   getRoomPoints,
   setRoomPoints,
   syncHandlesToRoom,
 } from "./room/room-walls";
+import type { RoomRuntime } from "./room/room-walls";
 
 import { createRoomDrawController } from "./room/room-draw";
 
@@ -102,14 +102,14 @@ function limitFurnitureSizeToRoomBBox(obj: any, room: Polygon, padding = 0) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
 
-  const roomRef = useRef<Polygon | null>(null);
-  const roomHandlesRef = useRef<Circle[]>([]);
+  const roomsRef = useRef<RoomRuntime[]>([]);
+  const activeRoomIdRef = useRef<string | null>(null);
 
   const isSpacePressedRef = useRef(false);
   const isShiftPressedRef = useRef(false);
@@ -126,7 +126,10 @@ export default forwardRef<
   const selectionRef = useRef<SelectionController | null>(null);
   const gridRef = useRef<GridController | null>(null);
   const historyRef = useRef<HistoryController | null>(null);
-  const wallEditingRef = useRef<WallEditingController | null>(null);
+
+  const wallEditingMapRef = useRef<Map<string, WallEditingController>>(
+    new Map()
+  );
 
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
@@ -138,7 +141,7 @@ export default forwardRef<
 
   const drawRoomRef = useRef<ReturnType<
     typeof createRoomDrawController
-    > | null>(null);
+  > | null>(null);
 
   const lastTransformWasAltRef = useRef(false);
 
@@ -171,13 +174,37 @@ export default forwardRef<
     }, 220);
   };
 
+  const getActiveRoomRuntime = () => {
+    const activeId = activeRoomIdRef.current;
+    if (!activeId) return null;
+    return roomsRef.current.find((r) => r.id === activeId) ?? null;
+  };
+
+  const getActiveRoom = () => {
+    return getActiveRoomRuntime()?.polygon ?? null;
+  };
+
+  const getActiveRoomHandles = () => {
+    return getActiveRoomRuntime()?.handles ?? [];
+  };
+
+  const setActiveRoomInternal = (roomId: string | null) => {
+    activeRoomIdRef.current = roomId;
+  };
+
   const syncRoomHandlesNow = (canvas: Canvas, room: Polygon) => {
-    syncHandlesToRoom(roomHandlesRef.current, room, canvas);
-    wallEditingRef.current?.rebindNewHandles();
+    const roomId = (room as any)?.data?.id as string | undefined;
+    if (!roomId) return;
+
+    const runtime = roomsRef.current.find((r) => r.id === roomId);
+    if (!runtime) return;
+
+    syncHandlesToRoom(runtime.handles, room, canvas);
+    wallEditingMapRef.current.get(roomId)?.rebindNewHandles();
   };
 
   const getRoomSizeInternal = (): RoomSize => {
-    const room = roomRef.current;
+    const room = getActiveRoom();
     if (!room) return { width: 0, height: 0 };
 
     const r = room.getBoundingRect();
@@ -186,7 +213,7 @@ export default forwardRef<
 
   const setRoomSizeInternal = (size: RoomSize) => {
     const canvas = fabricCanvasRef.current;
-    const room = roomRef.current;
+    const room = getActiveRoom();
     if (!canvas || !room) return;
 
     const min = 200;
@@ -256,8 +283,17 @@ export default forwardRef<
       });
     });
 
-    const room = createRoomPolygon(canvas);
-    roomRef.current = room;
+    const initialRoomId = "room-1";
+
+    const initialRuntime = createRoomRuntime(canvas, {
+      id: initialRoomId,
+    });
+
+    const room = initialRuntime.polygon;
+    const handles = initialRuntime.handles;
+
+    roomsRef.current = [initialRuntime];
+    activeRoomIdRef.current = initialRoomId;
 
     const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
     if (savedRoom) {
@@ -273,18 +309,30 @@ export default forwardRef<
 
           if (pts.length >= 3) {
             setRoomPoints(room, pts);
+            syncRoomHandlesNow(canvas, room);
           }
         }
       } catch {}
     }
 
-    const handles = createCornerHandles(canvas, room);
-    roomHandlesRef.current = handles;
+    const roomRefCompat = {
+      get current() {
+        return getActiveRoom();
+      },
+      set current(_: Polygon | null) {},
+    };
+
+    const roomHandlesRefCompat = {
+      get current() {
+        return getActiveRoomHandles();
+      },
+      set current(_: Circle[]) {},
+    };
 
     const grid = createGridController({
       canvas,
-      roomRef,
-      roomHandlesRef,
+      roomRef: roomRefCompat as React.MutableRefObject<Polygon | null>,
+      roomHandlesRef: roomHandlesRefCompat as React.MutableRefObject<Circle[]>,
       scheduleRender,
       initial: { visible: true, size: GRID_SIZE },
     });
@@ -338,7 +386,7 @@ export default forwardRef<
 
     actionsRef.current = createCanvasActions({
       getCanvas: () => fabricCanvasRef.current,
-      getRoom: () => roomRef.current,
+      getRoom: () => getActiveRoom(),
 
       getGridSize: () => getGridSize(),
       safeRender,
@@ -355,7 +403,7 @@ export default forwardRef<
       scheduleNudgeCommit,
     });
 
-    wallEditingRef.current = attachWallEditing({
+    const initialWallEditing = attachWallEditing({
       canvas,
       room,
       handles,
@@ -406,12 +454,13 @@ export default forwardRef<
       },
     });
 
-    wallEditingRef.current.rebindNewHandles();
+    wallEditingMapRef.current.set(initialRoomId, initialWallEditing);
+    initialWallEditing.rebindNewHandles();
 
     drawRoomRef.current = createRoomDrawController({
       canvas,
       room,
-      handlesRef: roomHandlesRef as any,
+      handlesRef: { current: handles } as React.MutableRefObject<Circle[]>,
       getGridSize: () => getGridSize(),
       scheduleRender,
       onSyncHandles: () => {
@@ -465,9 +514,15 @@ export default forwardRef<
       const el = containerRef.current;
       if (!el) return;
 
+      const activeRoom = getActiveRoom();
+
       canvas.setDimensions({ width: el.clientWidth, height: el.clientHeight });
       canvas.calcOffset();
-      fitRoomToView(canvas, room);
+
+      if (activeRoom) {
+        fitRoomToView(canvas, activeRoom);
+      }
+
       grid.rebuild();
       scheduleRender();
     };
@@ -485,7 +540,14 @@ export default forwardRef<
 
     canvas.on("object:scaling", (opt) => {
       const obj = opt.target as any;
+      const activeRoom = getActiveRoom();
+
       if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
+        emitSelection();
+        return;
+      }
+
+      if (!activeRoom) {
         emitSelection();
         return;
       }
@@ -593,6 +655,8 @@ export default forwardRef<
 
     canvas.on("object:moving", (opt) => {
       const obj = opt.target as any;
+      const activeRoom = getActiveRoom();
+
       if (!obj) return;
 
       if (obj.type === "activeSelection" || Array.isArray(obj?._objects)) {
@@ -600,11 +664,13 @@ export default forwardRef<
         return;
       }
 
+      if (!activeRoom) return;
+
       const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
       lastTransformWasAltRef.current = altDown;
 
       if (isOpening(obj)) {
-        snapOpeningToNearestWall(obj, room as any);
+        snapOpeningToNearestWall(obj, activeRoom as any);
         obj.setCoords();
         emitSelection();
         scheduleRender();
@@ -616,14 +682,14 @@ export default forwardRef<
       obj.setCoords();
 
       if (!isAltPressedRef.current) {
-        clampFurnitureInsideRoomPolygon(obj, room as any);
-        clampFurnitureInsideRoom(obj, room as any);
+        clampFurnitureInsideRoomPolygon(obj, activeRoom as any);
+        clampFurnitureInsideRoom(obj, activeRoom as any);
       }
 
       const shiftDown = isShiftPressedRef.current;
 
       if (!shiftDown && !isAltPressedRef.current) {
-        alignAndGuide(canvas, room as any, guidesRef, obj);
+        alignAndGuide(canvas, activeRoom as any, guidesRef, obj);
         obj.setCoords();
       } else {
         clearGuides(canvas, guidesRef);
@@ -659,6 +725,8 @@ export default forwardRef<
 
     canvas.on("object:modified", (opt) => {
       const obj = opt.target as any;
+      const activeRoom = getActiveRoom();
+
       if (!obj) return;
 
       const wasAlt = lastTransformWasAltRef.current;
@@ -674,8 +742,15 @@ export default forwardRef<
         return;
       }
 
+      if (!activeRoom) {
+        obj.setCoords();
+        emitSelection();
+        scheduleRender();
+        return;
+      }
+
       if (isOpening(obj)) {
-        snapOpeningToNearestWall(obj, room as any);
+        snapOpeningToNearestWall(obj, activeRoom as any);
         obj.setCoords();
         emitSelection();
         pushHistoryNow();
@@ -687,12 +762,12 @@ export default forwardRef<
 
       const gridSize = getGridSize();
 
-      snapFurnitureToRoomGrid(obj, room as any, gridSize);
+      snapFurnitureToRoomGrid(obj, activeRoom as any, gridSize);
 
-      limitFurnitureSizeToRoomBBox(obj, room as any, gridSize);
+      limitFurnitureSizeToRoomBBox(obj, activeRoom as any, gridSize);
 
-      clampFurnitureInsideRoomPolygon(obj, room as any);
-      clampFurnitureInsideRoom(obj, room as any);
+      clampFurnitureInsideRoomPolygon(obj, activeRoom as any);
+      clampFurnitureInsideRoom(obj, activeRoom as any);
 
       obj.setCoords();
 
@@ -706,10 +781,12 @@ export default forwardRef<
 
     canvas.on("mouse:dblclick", (opt) => {
       const obj = opt.target as any;
-      if (!obj) return;
+      const activeRoom = getActiveRoom();
+
+      if (!obj || !activeRoom) return;
 
       if (isOpening(obj) && obj.data?.type === "door") {
-        toggleDoorOpen(obj, room as any);
+        toggleDoorOpen(obj, activeRoom as any);
 
         obj.setCoords();
         emitSelection();
@@ -768,7 +845,7 @@ export default forwardRef<
       history.dispose();
       historyRef.current = null;
 
-      wallEditingRef.current = null;
+      wallEditingMapRef.current.clear();
 
       if (nudgeTimerRef.current) {
         window.clearTimeout(nudgeTimerRef.current);
@@ -777,15 +854,20 @@ export default forwardRef<
 
       clearGuides(canvas, guidesRef);
 
-      for (const h of roomHandlesRef.current) canvas.remove(h);
-      roomHandlesRef.current = [];
+      for (const runtime of roomsRef.current) {
+        for (const h of runtime.handles) {
+          canvas.remove(h);
+        }
+      }
+
+      roomsRef.current = [];
 
       canvas.dispose();
 
       fabricCanvasRef.current = null;
-      roomRef.current = null;
       scheduleRenderRef.current = null;
       actionsRef.current = null;
+      activeRoomIdRef.current = null;
     };
   }, []);
 
@@ -826,14 +908,14 @@ export default forwardRef<
 
       save() {
         const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
+        const room = getActiveRoom();
         if (!canvas || !room) return;
         saveNow(canvas, room);
       },
 
       load() {
         const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
+        const room = getActiveRoom();
         if (!canvas || !room) return;
 
         const { layoutJson } = loadNow(canvas, room, () =>
@@ -862,14 +944,14 @@ export default forwardRef<
 
       exportJson() {
         const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
+        const room = getActiveRoom();
         if (!canvas || !room) return;
         exportJsonFile(canvas, room);
       },
 
       importJsonString(json: string) {
         const canvas = fabricCanvasRef.current;
-        const room = roomRef.current;
+        const room = getActiveRoom();
         if (!canvas || !room) return;
 
         importJson(canvas, room, json, () =>
@@ -921,6 +1003,10 @@ export default forwardRef<
         actionsRef.current?.addWindow();
       },
 
+      isDrawingRoom() {
+        return !!drawRoomRef.current?.isActive();
+      },
+
       startDrawRoom() {
         drawRoomRef.current?.start();
       },
@@ -929,8 +1015,88 @@ export default forwardRef<
         drawRoomRef.current?.stop();
       },
 
-      isDrawingRoom() {
-        return !!drawRoomRef.current?.isActive();
+      addRoom() {
+        const canvas = fabricCanvasRef.current;
+        if (!canvas) return;
+
+        const nextId = `room-${roomsRef.current.length + 1}`;
+        const offset = roomsRef.current.length * 40;
+
+        const runtime = createRoomRuntime(canvas, {
+          id: nextId,
+          points: [
+            { x: 200 + offset, y: 150 + offset },
+            { x: 800 + offset, y: 150 + offset },
+            { x: 800 + offset, y: 550 + offset },
+            { x: 200 + offset, y: 550 + offset },
+          ],
+        });
+
+        roomsRef.current.push(runtime);
+        activeRoomIdRef.current = nextId;
+
+        const wallEditing = attachWallEditing({
+          canvas,
+          room: runtime.polygon,
+          handles: runtime.handles,
+          gridSize: getGridSize(),
+          onRoomChanging: () => {
+            if (drawRoomRef.current?.isActive()) return;
+
+            gridRef.current?.rebuild();
+            updateOpeningsForRoomChange(canvas, runtime.polygon as any);
+
+            canvas.getObjects().forEach((o: any) => {
+              if (!isFurniture(o)) return;
+              clampFurnitureInsideRoomPolygon(o, runtime.polygon as any);
+              clampFurnitureInsideRoom(o, runtime.polygon as any);
+              limitFurnitureSizeToRoomBBox(o, runtime.polygon, getGridSize());
+              o.setCoords();
+            });
+
+            clearGuides(canvas, guidesRef);
+            safeRender();
+          },
+          onRoomChanged: () => {
+            if (drawRoomRef.current?.isActive()) return;
+
+            syncRoomHandlesNow(canvas, runtime.polygon);
+
+            fitRoomToView(canvas, runtime.polygon);
+            gridRef.current?.rebuild();
+            updateOpeningsForRoomChange(canvas, runtime.polygon as any);
+
+            canvas.getObjects().forEach((o: any) => {
+              if (!isFurniture(o)) return;
+              limitFurnitureSizeToRoomBBox(o, runtime.polygon, getGridSize());
+              clampFurnitureInsideRoomPolygon(o, runtime.polygon as any);
+              clampFurnitureInsideRoom(o, runtime.polygon as any);
+              o.setCoords();
+            });
+
+            pushHistoryNow();
+          },
+        });
+
+        wallEditingMapRef.current.set(nextId, wallEditing);
+        wallEditing.rebindNewHandles();
+
+        fitRoomToView(canvas, runtime.polygon);
+        safeRender();
+      },
+
+      getActiveRoomId() {
+        return activeRoomIdRef.current;
+      },
+
+      setActiveRoom(roomId: string) {
+        const runtime = roomsRef.current.find((r) => r.id === roomId);
+        const canvas = fabricCanvasRef.current;
+        if (!runtime || !canvas) return;
+
+        setActiveRoomInternal(roomId);
+        fitRoomToView(canvas, runtime.polygon);
+        safeRender();
       },
     }),
     []
@@ -939,7 +1105,7 @@ export default forwardRef<
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full bg-white border border-neutral-300 overflow-hidden"
+      className="relative w-full h-full min-h-0 min-w-0 bg-white border border-neutral-300 overflow-hidden"
     >
       <canvas ref={htmlCanvasRef} />
     </div>
