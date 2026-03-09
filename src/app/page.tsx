@@ -141,241 +141,32 @@ export default function HomePage() {
   }, [gridVisible, gridSize]);
 
   return (
-    <main className="w-screen h-screen grid grid-cols-[340px_1fr] bg-neutral-100">
-      <aside className="p-4 border-r border-neutral-300 bg-white flex flex-col gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-neutral-900">Planner</h1>
-          <p className="text-sm text-neutral-500">
-            Scroll = zoom • Hold <b>Space</b> = pan • <b>Shift</b> = snap/step •{" "}
-            <b>Alt</b> = bypass constraints • [ ] layers
-          </p>
-        </div>
+    <main className="w-screen h-dvh overflow-hidden bg-neutral-100">
+      <div className="grid h-full min-h-0 grid-cols-[340px_minmax(0,1fr)]">
+        <aside className="min-h-0 overflow-y-auto border-r border-neutral-300 bg-white p-4">
+          <div className="flex min-h-full flex-col gap-4">
+            <div>
+              <h1 className="text-xl font-semibold text-neutral-900">
+                Planner
+              </h1>
+              <p className="text-sm text-neutral-500">
+                Scroll = zoom • Hold <b>Space</b> = pan • <b>Shift</b> =
+                snap/step • <b>Alt</b> = bypass constraints • [ ] layers
+              </p>
+            </div>
 
-        {/* ROOM */}
-        <div className="rounded-lg border border-neutral-200 bg-white p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">
-            Room
-          </div>
+            {/* ROOM */}
+            <div className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 text-sm font-semibold text-neutral-700">
+                Room
+              </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-neutral-600">
-              Width
-              <input
-                value={roomW}
-                onChange={(e) => setRoomW(e.target.value)}
-                className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
-                inputMode="numeric"
-              />
-            </label>
-
-            <label className="text-xs text-neutral-600">
-              Height
-              <input
-                value={roomH}
-                onChange={(e) => setRoomH(e.target.value)}
-                className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
-                inputMode="numeric"
-              />
-            </label>
-          </div>
-
-          <div className="flex gap-2 mt-2">
-            <button className={cls(btnBase, btnDark)} onClick={applyRoom}>
-              Apply
-            </button>
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={syncRoomFromCanvas}
-            >
-              Read
-            </button>
-          </div>
-
-          <div className="flex gap-2 mt-2">
-            {!isDrawingWalls ? (
-              <button
-                className={cls(btnBase, btnDark, "w-full")}
-                onClick={() => {
-                  canvasRef.current?.startDrawRoom?.();
-                  setIsDrawingWalls(true);
-                }}
-              >
-                Draw walls
-              </button>
-            ) : (
-              <button
-                className={cls(btnBase, btnDark, "w-full")}
-                onClick={() => {
-                  canvasRef.current?.stopDrawRoom?.();
-                  setIsDrawingWalls(false);
-                  syncRoomFromCanvas();
-                }}
-              >
-                Finish drawing
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* GRID */}
-        <div className="rounded-lg border border-neutral-200 bg-white p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">
-            Grid
-          </div>
-
-          <label className="flex items-center gap-2 text-sm text-neutral-700">
-            <input
-              type="checkbox"
-              checked={gridVisible}
-              onChange={(e) => {
-                const v = e.target.checked;
-                setGridVisible(v);
-                canvasRef.current?.setGridVisible(v);
-              }}
-            />
-            Show grid
-          </label>
-
-          <label className="text-xs text-neutral-600 mt-3 block">
-            Grid size
-            <select
-              className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
-              value={gridSize}
-              onChange={(e) => {
-                const size = Number(e.target.value);
-                setGridSize(size);
-                canvasRef.current?.setGridSize(size);
-              }}
-            >
-              {[10, 20, 25, 50, 100].map((s) => (
-                <option key={s} value={s}>
-                  {s}px
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {/* ACTIONS */}
-        <div className="rounded-lg border border-neutral-200 bg-white p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">
-            Actions
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.undo()}
-            >
-              Undo
-            </button>
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.redo()}
-            >
-              Redo
-            </button>
-
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.save()}
-            >
-              Save
-            </button>
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.load()}
-            >
-              Load
-            </button>
-
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.exportJson()}
-            >
-              Export JSON
-            </button>
-            <button
-              className={cls(btnBase, btnNeutral)}
-              onClick={() => canvasRef.current?.importJsonString(importText)}
-            >
-              Import JSON
-            </button>
-          </div>
-
-          <button
-            className={cls(btnBase, btnDark, "w-full mt-2")}
-            onClick={() => canvasRef.current?.fitRoom()}
-          >
-            Fit room to view
-          </button>
-
-          <textarea
-            value={importText}
-            onChange={(e) => setImportText(e.target.value)}
-            placeholder="Paste JSON here to import…"
-            className="mt-2 w-full h-24 rounded border border-neutral-300 p-2 text-xs font-mono text-neutral-900"
-          />
-        </div>
-
-        {/* ADD */}
-        <div className="flex flex-col gap-2">
-          <div className="text-sm font-semibold text-neutral-700">
-            Add furniture
-          </div>
-
-          <button
-            className={cls(btnBase, btnPrimary, "w-full")}
-            onClick={() => canvasRef.current?.addFurniture("sofa")}
-          >
-            Add Sofa
-          </button>
-          <button
-            className={cls(btnBase, btnPrimary, "w-full")}
-            onClick={() => canvasRef.current?.addFurniture("table")}
-          >
-            Add Table
-          </button>
-          <button
-            className={cls(btnBase, btnPrimary, "w-full")}
-            onClick={() => canvasRef.current?.addFurniture("chair")}
-          >
-            Add Chair
-          </button>
-          <button
-            className={cls(btnBase, btnPrimary, "w-full")}
-            onClick={() => canvasRef.current?.addWindow()}
-          >
-            Add Window
-          </button>
-          <button
-            className={cls(btnBase, btnPrimary, "w-full")}
-            onClick={() => canvasRef.current?.addDoor()}
-          >
-            Add Door
-          </button>
-        </div>
-
-        {/* SELECTION */}
-        <div className="rounded-lg border border-neutral-200 bg-white p-3">
-          <div className="text-sm font-semibold text-neutral-700 mb-2">
-            Selection
-          </div>
-
-          <div className="text-sm text-neutral-700">{header}</div>
-
-          {!selected ? (
-            <p className="text-sm text-neutral-500 mt-2">
-              Click an item on the canvas to see properties here.
-            </p>
-          ) : (
-            <div className="mt-3 flex flex-col gap-3">
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-xs text-neutral-600">
                   Width
                   <input
-                    value={w}
-                    onChange={(e) => setW(e.target.value)}
+                    value={roomW}
+                    onChange={(e) => setRoomW(e.target.value)}
                     className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
                     inputMode="numeric"
                   />
@@ -384,103 +175,325 @@ export default function HomePage() {
                 <label className="text-xs text-neutral-600">
                   Height
                   <input
-                    value={h}
-                    onChange={(e) => setH(e.target.value)}
+                    value={roomH}
+                    onChange={(e) => setRoomH(e.target.value)}
                     className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
                     inputMode="numeric"
                   />
                 </label>
+              </div>
 
-                <label className="text-xs text-neutral-600">
-                  Angle
-                  <input
-                    value={a}
-                    onChange={(e) => setA(e.target.value)}
-                    className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
-                    inputMode="numeric"
-                  />
-                </label>
+              <div className="mt-2 flex gap-2">
+                <button className={cls(btnBase, btnDark)} onClick={applyRoom}>
+                  Apply
+                </button>
+                <button
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={syncRoomFromCanvas}
+                >
+                  Read
+                </button>
+              </div>
 
-                {selected.type === "door" && (
-                  <label className="text-xs text-neutral-600">
-                    Hinge
-                    <select
-                      className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
-                      value={hinge}
-                      onChange={(e) => {
-                        const next = e.target.value as "start" | "end";
-                        setHinge(next);
-
-                        canvasRef.current?.setSelectedProps({
-                          hinge: next,
-                        });
-                      }}
-                    >
-                      <option value="start">Start</option>
-                      <option value="end">End</option>
-                    </select>
-                  </label>
-                )}
-
-                {selected.type === "door" && (
+              <div className="mt-2 flex gap-2">
+                {!isDrawingWalls ? (
                   <button
-                    type="button"
-                    className={cls(btnBase, btnPrimary, "w-full")}
-                    onClick={() => canvasRef.current?.toggleSelectedDoor()}
+                    className={cls(btnBase, btnDark, "w-full")}
+                    onClick={() => {
+                      canvasRef.current?.startDrawRoom?.();
+                      setIsDrawingWalls(true);
+                    }}
                   >
-                    {isOpen ? "Close Door" : "Open Door"}
+                    Draw walls
+                  </button>
+                ) : (
+                  <button
+                    className={cls(btnBase, btnDark, "w-full")}
+                    onClick={() => {
+                      canvasRef.current?.stopDrawRoom?.();
+                      setIsDrawingWalls(false);
+                      syncRoomFromCanvas();
+                    }}
+                  >
+                    Finish drawing
                   </button>
                 )}
               </div>
+            </div>
 
-              <div className="flex gap-2">
-                <button
-                  className={cls(btnBase, btnDark, !canEdit && btnDisabled)}
-                  disabled={!canEdit}
-                  onClick={applyProps}
+            {/* GRID */}
+            <div className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 text-sm font-semibold text-neutral-700">
+                Grid
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={gridVisible}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setGridVisible(v);
+                    canvasRef.current?.setGridVisible(v);
+                  }}
+                />
+                Show grid
+              </label>
+
+              <label className="mt-3 block text-xs text-neutral-600">
+                Grid size
+                <select
+                  className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
+                  value={gridSize}
+                  onChange={(e) => {
+                    const size = Number(e.target.value);
+                    setGridSize(size);
+                    canvasRef.current?.setGridSize(size);
+                  }}
                 >
-                  Apply
+                  {[10, 20, 25, 50, 100].map((s) => (
+                    <option key={s} value={s}>
+                      {s}px
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {/* ACTIONS */}
+            <div className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 text-sm font-semibold text-neutral-700">
+                Actions
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() => canvasRef.current?.undo()}
+                >
+                  Undo
+                </button>
+                <button
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() => canvasRef.current?.redo()}
+                >
+                  Redo
                 </button>
 
                 <button
-                  className={cls(btnBase, btnNeutral, !canEdit && btnDisabled)}
-                  disabled={!canEdit}
-                  onClick={() => canvasRef.current?.duplicateSelected()}
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() => canvasRef.current?.save()}
                 >
-                  Duplicate
+                  Save
+                </button>
+                <button
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() => canvasRef.current?.load()}
+                >
+                  Load
                 </button>
 
                 <button
-                  className={cls(
-                    btnBase,
-                    btnDanger,
-                    "ml-auto",
-                    !canEdit && btnDisabled
-                  )}
-                  disabled={!canEdit}
-                  onClick={() => canvasRef.current?.deleteSelected()}
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() => canvasRef.current?.exportJson()}
                 >
-                  Delete
+                  Export JSON
+                </button>
+                <button
+                  className={cls(btnBase, btnNeutral)}
+                  onClick={() =>
+                    canvasRef.current?.importJsonString(importText)
+                  }
+                >
+                  Import JSON
                 </button>
               </div>
+
+              <button
+                className={cls(btnBase, btnDark, "mt-2 w-full")}
+                onClick={() => canvasRef.current?.fitRoom()}
+              >
+                Fit room to view
+              </button>
+
+              <textarea
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                placeholder="Paste JSON here to import…"
+                className="mt-2 h-24 w-full rounded border border-neutral-300 p-2 text-xs font-mono text-neutral-900"
+              />
             </div>
-          )}
-        </div>
 
-        <div className="mt-auto text-xs text-neutral-500">
-          Ctrl/⌘+C/V copy/paste • Ctrl/⌘+Z undo • Ctrl/⌘+Shift+Z redo • Arrows
-          nudge • Shift+Arrows = grid step • Alt = no clamp/snap • [ ] layers
-        </div>
-      </aside>
+            {/* ADD */}
+            <div className="flex flex-col gap-2">
+              <div className="text-sm font-semibold text-neutral-700">
+                Add furniture
+              </div>
 
-      <section className="p-4 bg-white">
-        <div className="w-full h-full">
-          <PlannerCanvas
-            ref={canvasRef}
-            onSelectionChange={onSelectionChange}
-          />
-        </div>
-      </section>
+              <button
+                className={cls(btnBase, btnPrimary, "w-full")}
+                onClick={() => canvasRef.current?.addFurniture("sofa")}
+              >
+                Add Sofa
+              </button>
+              <button
+                className={cls(btnBase, btnPrimary, "w-full")}
+                onClick={() => canvasRef.current?.addFurniture("table")}
+              >
+                Add Table
+              </button>
+              <button
+                className={cls(btnBase, btnPrimary, "w-full")}
+                onClick={() => canvasRef.current?.addFurniture("chair")}
+              >
+                Add Chair
+              </button>
+              <button
+                className={cls(btnBase, btnPrimary, "w-full")}
+                onClick={() => canvasRef.current?.addWindow()}
+              >
+                Add Window
+              </button>
+              <button
+                className={cls(btnBase, btnPrimary, "w-full")}
+                onClick={() => canvasRef.current?.addDoor()}
+              >
+                Add Door
+              </button>
+            </div>
+
+            {/* SELECTION */}
+            <div className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 text-sm font-semibold text-neutral-700">
+                Selection
+              </div>
+
+              <div className="text-sm text-neutral-700">{header}</div>
+
+              {!selected ? (
+                <p className="mt-2 text-sm text-neutral-500">
+                  Click an item on the canvas to see properties here.
+                </p>
+              ) : (
+                <div className="mt-3 flex flex-col gap-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs text-neutral-600">
+                      Width
+                      <input
+                        value={w}
+                        onChange={(e) => setW(e.target.value)}
+                        className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+                        inputMode="numeric"
+                      />
+                    </label>
+
+                    <label className="text-xs text-neutral-600">
+                      Height
+                      <input
+                        value={h}
+                        onChange={(e) => setH(e.target.value)}
+                        className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+                        inputMode="numeric"
+                      />
+                    </label>
+
+                    <label className="text-xs text-neutral-600">
+                      Angle
+                      <input
+                        value={a}
+                        onChange={(e) => setA(e.target.value)}
+                        className="mt-1 w-full rounded border border-neutral-300 px-2 py-1 text-sm"
+                        inputMode="numeric"
+                      />
+                    </label>
+
+                    {selected.type === "door" && (
+                      <label className="text-xs text-neutral-600">
+                        Hinge
+                        <select
+                          className="mt-1 w-full rounded border border-neutral-300 px-2 py-2 text-sm"
+                          value={hinge}
+                          onChange={(e) => {
+                            const next = e.target.value as "start" | "end";
+                            setHinge(next);
+
+                            canvasRef.current?.setSelectedProps({
+                              hinge: next,
+                            });
+                          }}
+                        >
+                          <option value="start">Start</option>
+                          <option value="end">End</option>
+                        </select>
+                      </label>
+                    )}
+
+                    {selected.type === "door" && (
+                      <button
+                        type="button"
+                        className={cls(btnBase, btnPrimary, "w-full")}
+                        onClick={() => canvasRef.current?.toggleSelectedDoor()}
+                      >
+                        {isOpen ? "Close Door" : "Open Door"}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      className={cls(btnBase, btnDark, !canEdit && btnDisabled)}
+                      disabled={!canEdit}
+                      onClick={applyProps}
+                    >
+                      Apply
+                    </button>
+
+                    <button
+                      className={cls(
+                        btnBase,
+                        btnNeutral,
+                        !canEdit && btnDisabled
+                      )}
+                      disabled={!canEdit}
+                      onClick={() => canvasRef.current?.duplicateSelected()}
+                    >
+                      Duplicate
+                    </button>
+
+                    <button
+                      className={cls(
+                        btnBase,
+                        btnDanger,
+                        "ml-auto",
+                        !canEdit && btnDisabled
+                      )}
+                      disabled={!canEdit}
+                      onClick={() => canvasRef.current?.deleteSelected()}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-auto text-xs text-neutral-500">
+              Ctrl/⌘+C/V copy/paste • Ctrl/⌘+Z undo • Ctrl/⌘+Shift+Z redo •
+              Arrows nudge • Shift+Arrows = grid step • Alt = no clamp/snap • [
+              ] layers
+            </div>
+          </div>
+        </aside>
+
+        <section className="min-h-0 min-w-0 overflow-hidden bg-white p-4">
+          <div className="h-full w-full min-h-0">
+            <PlannerCanvas
+              ref={canvasRef}
+              onSelectionChange={onSelectionChange}
+            />
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
