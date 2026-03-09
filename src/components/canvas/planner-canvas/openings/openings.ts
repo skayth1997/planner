@@ -3,8 +3,13 @@ import { Rect, Point, Path } from "fabric";
 import { makeId } from "../core/utils";
 import { projectPointToSegment } from "./wall-math";
 import { getRoomPoints } from "../room/room-walls";
-import type { Pt, WallSeg } from "../core/planner-types";
+import type { Pt, RoomId, WallSeg } from "../core/planner-types";
+
 const DOOR_INSET = 12;
+
+function getRoomId(room: Polygon): RoomId | undefined {
+  return (room as any)?.data?.id as RoomId | undefined;
+}
 
 function wallsFromRoom(room: Polygon) {
   const pts = (getRoomPoints(room) as Pt[]).map((p) => ({
@@ -44,10 +49,10 @@ function segmentNormal(a: Pt, b: Pt) {
 function pointInPolygon(p: Pt, poly: Pt[]) {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x,
-      yi = poly[i].y;
-    const xj = poly[j].x,
-      yj = poly[j].y;
+    const xi = poly[i].x;
+    const yi = poly[i].y;
+    const xj = poly[j].x;
+    const yj = poly[j].y;
 
     const intersect =
       yi > p.y !== yj > p.y &&
@@ -219,6 +224,11 @@ export function isOpening(obj: any) {
 export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   if (!isOpening(obj)) return;
 
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
+
   const { segs, poly } = wallsFromRoom(room);
   if (segs.length < 3) return;
 
@@ -274,6 +284,7 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
     obj.data = {
       ...(obj.data ?? {}),
       kind: "opening",
+      roomId: objRoomId ?? roomId,
       wallId: best.wallId,
       t: best.t,
       offset: prevOffset,
@@ -337,6 +348,7 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
   obj.data = {
     ...(obj.data ?? {}),
     kind: "opening",
+    roomId: objRoomId ?? roomId,
     wallId: bestDoor.wallId,
     t: bestDoor.t,
     offset: prevOffset,
@@ -347,11 +359,14 @@ export function snapOpeningToNearestWall(obj: any, room: Polygon) {
 }
 
 export function updateOpeningsForRoomChange(canvas: Canvas, room: Polygon) {
+  const roomId = getRoomId(room);
   const { segs, poly } = wallsFromRoom(room);
   if (segs.length < 3) return;
 
   canvas.getObjects().forEach((o: any) => {
     if (!isOpening(o)) return;
+
+    if (roomId && o?.data?.roomId && o.data.roomId !== roomId) return;
 
     ensureWallId(o, segs);
 
@@ -431,6 +446,8 @@ export function applyDoorHinge(
 }
 
 export function addDoor(canvas: Canvas, room: Polygon) {
+  const roomId = getRoomId(room);
+
   const door = new Rect({
     width: 90,
     height: 14,
@@ -452,6 +469,7 @@ export function addDoor(canvas: Canvas, room: Polygon) {
     kind: "opening",
     type: "door",
     id: makeId(),
+    roomId,
     wallId: "seg-0",
     t: 0.5,
     offset: 0,
@@ -466,6 +484,8 @@ export function addDoor(canvas: Canvas, room: Polygon) {
 }
 
 export function addWindow(canvas: Canvas, room: Polygon) {
+  const roomId = getRoomId(room);
+
   const win = new Rect({
     width: 80,
     height: 10,
@@ -487,6 +507,7 @@ export function addWindow(canvas: Canvas, room: Polygon) {
     kind: "opening",
     type: "window",
     id: makeId(),
+    roomId,
     wallId: "seg-0",
     t: 0.5,
     offset: 0,
