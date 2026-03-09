@@ -16,12 +16,11 @@ export function attachMouseController(args: Args) {
   let lastClientX = 0;
   let lastClientY = 0;
 
-  const startPan = (e: any) => {
+  const startPan = (e: MouseEvent) => {
     isPanning = true;
     lastClientX = e.clientX ?? 0;
     lastClientY = e.clientY ?? 0;
 
-    // during pan, disable group selection box
     canvas.selection = false;
     canvas.defaultCursor = "grab";
     canvas.hoverCursor = "grab";
@@ -29,6 +28,7 @@ export function attachMouseController(args: Args) {
 
   const endPan = () => {
     if (!isPanning) return;
+
     isPanning = false;
 
     canvas.selection = true;
@@ -41,8 +41,6 @@ export function attachMouseController(args: Args) {
 
   const onMouseDown = (opt: any) => {
     const e = opt.e as MouseEvent;
-
-    // Middle mouse can pan too (nice UX)
     const isMiddle = (e.button ?? 0) === 1;
 
     if (isSpacePressedRef.current || isMiddle) {
@@ -75,30 +73,33 @@ export function attachMouseController(args: Args) {
   };
 
   const onMouseOut = () => {
-    // safety: end panning when pointer leaves canvas
     endPan();
   };
 
   const onWheel = (opt: any) => {
     const e = opt.e as WheelEvent;
-
-    // don’t zoom while actively panning
     if (isPanning) return;
 
     e.preventDefault();
+    e.stopPropagation();
 
-    const delta = e.deltaY;
+    const upperCanvas = canvas.upperCanvasEl;
+    const rect = upperCanvas.getBoundingClientRect();
 
-    let nextZoom = canvas.getZoom();
-    // sensitivity ~ 0.999, use exp-like curve
-    nextZoom *= Math.pow(zoom.sensitivity, delta);
+    const pointer = new Point(
+      e.clientX - rect.left,
+      e.clientY - rect.top
+    );
+
+    const currentZoom = canvas.getZoom();
+
+    let nextZoom = currentZoom * Math.pow(zoom.sensitivity, e.deltaY);
 
     nextZoom = Math.max(zoom.min, Math.min(zoom.max, nextZoom));
 
-    // zoom towards cursor
-    const pointer = canvas.getScenePoint(e as any);
-    canvas.zoomToPoint(new Point(pointer.x, pointer.y), nextZoom);
+    if (nextZoom === currentZoom) return;
 
+    canvas.zoomToPoint(pointer, nextZoom);
     scheduleRender();
   };
 
@@ -108,7 +109,6 @@ export function attachMouseController(args: Args) {
   canvas.on("mouse:out", onMouseOut);
   canvas.on("mouse:wheel", onWheel);
 
-  // global safety (mouseup outside canvas)
   const onWindowMouseUp = () => endPan();
   window.addEventListener("mouseup", onWindowMouseUp);
 
