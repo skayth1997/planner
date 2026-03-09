@@ -54,6 +54,8 @@ import {
   syncHandlesToRoom,
 } from "./room/room-walls";
 
+import { createRoomDrawController } from "./room/room-draw";
+
 import { createRenderScheduler } from "./core/render";
 
 import {
@@ -134,6 +136,10 @@ export default forwardRef<
 
   const lastTransformWasAltRef = useRef(false);
 
+  const drawRoomRef = useRef<ReturnType<
+    typeof createRoomDrawController
+  > | null>(null);
+
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
@@ -142,8 +148,6 @@ export default forwardRef<
   };
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
-
-  const snapToGrid = (v: number, grid: number) => Math.round(v / grid) * grid;
 
   const emitSelection = () => {
     selectionRef.current?.emitSelection();
@@ -340,11 +344,12 @@ export default forwardRef<
       scheduleNudgeCommit,
     });
 
-    attachWallEditing({
+    drawRoomRef.current = createRoomDrawController({
       canvas,
       room,
-      handles,
-      gridSize: getGridSize(),
+      handlesRef: roomHandlesRef as any,
+      getGridSize: () => getGridSize(),
+      scheduleRender,
       onRoomChanging: () => {
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
@@ -361,6 +366,55 @@ export default forwardRef<
         safeRender();
       },
       onRoomChanged: () => {
+        fitRoomToView(canvas, room);
+        grid.rebuild();
+        updateOpeningsForRoomChange(canvas, room as any);
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
+          clampFurnitureInsideRoomPolygon(o, room as any);
+          clampFurnitureInsideRoom(o, room as any);
+          o.setCoords();
+        });
+
+        pushHistoryNow();
+
+        try {
+          const pts = getRoomPoints(room);
+          localStorage.setItem(
+            STORAGE_ROOM_KEY,
+            JSON.stringify({ points: pts })
+          );
+        } catch {}
+      },
+    });
+
+    attachWallEditing({
+      canvas,
+      room,
+      handles,
+      gridSize: getGridSize(),
+      onRoomChanging: () => {
+        if (drawRoomRef.current?.isActive()) return;
+
+        grid.rebuild();
+        updateOpeningsForRoomChange(canvas, room as any);
+
+        canvas.getObjects().forEach((o: any) => {
+          if (!isFurniture(o)) return;
+          clampFurnitureInsideRoomPolygon(o, room as any);
+          clampFurnitureInsideRoom(o, room as any);
+          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
+          o.setCoords();
+        });
+
+        clearGuides(canvas, guidesRef);
+        safeRender();
+      },
+      onRoomChanged: () => {
+        if (drawRoomRef.current?.isActive()) return;
+
         fitRoomToView(canvas, room);
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
@@ -682,6 +736,9 @@ export default forwardRef<
       detachMouse();
       detachKeyboard();
 
+      drawRoomRef.current?.stop();
+      drawRoomRef.current = null;
+
       selection.detach();
       selectionRef.current = null;
 
@@ -840,6 +897,16 @@ export default forwardRef<
 
       addWindow() {
         actionsRef.current?.addWindow();
+      },
+
+      startDrawRoom() {
+        drawRoomRef.current?.start();
+      },
+      stopDrawRoom() {
+        drawRoomRef.current?.stop();
+      },
+      isDrawingRoom() {
+        return !!drawRoomRef.current?.isActive();
       },
     }),
     []

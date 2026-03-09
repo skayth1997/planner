@@ -56,6 +56,8 @@ export default function HomePage() {
 
   const [isOpen, setIsOpen] = useState(false);
 
+  const [isDrawingWalls, setIsDrawingWalls] = useState(false);
+
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
 
@@ -187,6 +189,31 @@ export default function HomePage() {
             >
               Read
             </button>
+          </div>
+
+          <div className="flex gap-2 mt-2">
+            {!isDrawingWalls ? (
+              <button
+                className={cls(btnBase, btnDark, "w-full")}
+                onClick={() => {
+                  canvasRef.current?.startDrawRoom?.();
+                  setIsDrawingWalls(true);
+                }}
+              >
+                Draw walls
+              </button>
+            ) : (
+              <button
+                className={cls(btnBase, btnDark, "w-full")}
+                onClick={() => {
+                  canvasRef.current?.stopDrawRoom?.();
+                  setIsDrawingWalls(false);
+                  syncRoomFromCanvas();
+                }}
+              >
+                Finish drawing
+              </button>
+            )}
           </div>
         </div>
 
@@ -404,7 +431,6 @@ export default function HomePage() {
                     {isOpen ? "Close Door" : "Open Door"}
                   </button>
                 )}
-
               </div>
 
               <div className="flex gap-2">

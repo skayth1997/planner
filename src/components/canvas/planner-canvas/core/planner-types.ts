@@ -54,6 +54,9 @@ export type PlannerCanvasHandle = {
   addDoor: () => void;
   addWindow: () => void;
   toggleSelectedDoor(): void;
+  isDrawingRoom: () => boolean;
+  startDrawRoom?: () => void;
+  stopDrawRoom?: () => void;
 };
 
 export type FurnitureSnapshot = {
