@@ -32,6 +32,36 @@ function normalizeRoomPoints(points: RoomPoint[]) {
   };
 }
 
+function createOneCornerHandle(canvas: Canvas, p: RoomPoint, idx: number) {
+  const c = new Circle({
+    left: p.x,
+    top: p.y,
+    radius: 7,
+    fill: "#2563eb",
+    stroke: "#ffffff",
+    strokeWidth: 2,
+    originX: "center",
+    originY: "center",
+    selectable: true,
+    evented: true,
+    hasControls: false,
+    hasBorders: false,
+    lockScalingX: true,
+    lockScalingY: true,
+    lockRotation: true,
+    transparentCorners: false,
+    objectCaching: false,
+    hoverCursor: "pointer",
+  });
+
+  (c as any).data = { kind: "room-handle", index: idx };
+
+  canvas.add(c);
+  canvas.bringObjectToFront(c);
+
+  return c;
+}
+
 export function createRoomPolygon(canvas: Canvas) {
   const absolutePoints: RoomPoint[] = [
     { x: 200, y: 150 },
@@ -40,8 +70,9 @@ export function createRoomPolygon(canvas: Canvas) {
     { x: 200, y: 550 },
   ];
 
-  const { left, top, width, height, localPoints } =
-    normalizeRoomPoints(absolutePoints);
+  const { left, top, width, height, localPoints } = normalizeRoomPoints(
+    absolutePoints
+  );
 
   const room = new Polygon(localPoints as any, {
     left,
@@ -67,9 +98,6 @@ export function createRoomPolygon(canvas: Canvas) {
   return room;
 }
 
-/**
- * Always return ABSOLUTE canvas points.
- */
 export function getRoomPoints(room: Polygon): RoomPoint[] {
   const pts = (room.points ?? []) as any[];
   const left = Number(room.left) || 0;
@@ -81,15 +109,10 @@ export function getRoomPoints(room: Polygon): RoomPoint[] {
   }));
 }
 
-/**
- * Accept ABSOLUTE canvas points and store them properly as
- * local polygon points + left/top bbox.
- */
 export function setRoomPoints(room: Polygon, points: RoomPoint[]) {
   if (!points.length) return;
 
-  const { left, top, width, height, localPoints } =
-    normalizeRoomPoints(points);
+  const { left, top, width, height, localPoints } = normalizeRoomPoints(points);
 
   room.set({
     left,
@@ -107,41 +130,26 @@ export function setRoomPoints(room: Polygon, points: RoomPoint[]) {
 
 export function createCornerHandles(canvas: Canvas, room: Polygon) {
   const pts = getRoomPoints(room);
-
-  const handles: Circle[] = pts.map((p, idx) => {
-    const c = new Circle({
-      left: p.x,
-      top: p.y,
-      radius: 7,
-      fill: "#2563eb",
-      stroke: "#ffffff",
-      strokeWidth: 2,
-      originX: "center",
-      originY: "center",
-      selectable: true,
-      evented: true,
-      hasControls: false,
-      hasBorders: false,
-      lockScalingX: true,
-      lockScalingY: true,
-      lockRotation: true,
-      transparentCorners: false,
-      objectCaching: false,
-      hoverCursor: "pointer",
-    });
-
-    (c as any).data = { kind: "room-handle", index: idx };
-
-    canvas.add(c);
-    canvas.bringObjectToFront(c);
-    return c;
-  });
-
-  return handles;
+  return pts.map((p, idx) => createOneCornerHandle(canvas, p, idx));
 }
 
-export function syncHandlesToRoom(handles: Circle[], room: Polygon) {
+export function syncHandlesToRoom(
+  handles: Circle[],
+  room: Polygon,
+  canvas?: Canvas
+) {
   const pts = getRoomPoints(room);
+
+  if (canvas && handles.length < pts.length) {
+    for (let i = handles.length; i < pts.length; i++) {
+      handles.push(createOneCornerHandle(canvas, pts[i], i));
+    }
+  }
+
+  while (handles.length > pts.length) {
+    const h = handles.pop();
+    if (h && canvas) canvas.remove(h);
+  }
 
   handles.forEach((h, i) => {
     const p = pts[i];
@@ -151,6 +159,13 @@ export function syncHandlesToRoom(handles: Circle[], room: Polygon) {
       left: p.x,
       top: p.y,
     });
+
+    (h as any).data = {
+      ...(h as any).data,
+      kind: "room-handle",
+      index: i,
+    };
+
     h.setCoords();
   });
 }
@@ -167,6 +182,7 @@ type AttachArgs = {
 
 export function attachWallEditing(args: AttachArgs) {
   const {
+    canvas,
     room,
     handles,
     gridSize,
@@ -175,28 +191,7 @@ export function attachWallEditing(args: AttachArgs) {
     onRoomChanged,
   } = args;
 
-  const getAABB = () => {
-    const pts = getRoomPoints(room);
-
-    const xs = pts.map((p) => p.x);
-    const ys = pts.map((p) => p.y);
-
-    const left = Math.min(...xs);
-    const top = Math.min(...ys);
-    const right = Math.max(...xs);
-    const bottom = Math.max(...ys);
-
-    return {
-      left,
-      top,
-      right,
-      bottom,
-      width: right - left,
-      height: bottom - top,
-    };
-  };
-
-  handles.forEach((h) => {
+  const bindHandle = (h: Circle) => {
     h.on("moving", () => {
       const idx = (h as any).data?.index ?? 0;
 
@@ -224,9 +219,8 @@ export function attachWallEditing(args: AttachArgs) {
       const height = maxY - minY;
 
       if (width < minSize || height < minSize) {
-        const aabb = getAABB();
-        const cx = (aabb.left + aabb.right) / 2;
-        const cy = (aabb.top + aabb.bottom) / 2;
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
 
         if (width < minSize) {
           nx = nx < cx ? cx - minSize / 2 : cx + minSize / 2;
@@ -244,7 +238,7 @@ export function attachWallEditing(args: AttachArgs) {
       }
 
       setRoomPoints(room, pts);
-      syncHandlesToRoom(handles, room);
+      syncHandlesToRoom(handles, room, canvas);
 
       onRoomChanging?.();
     });
@@ -252,5 +246,19 @@ export function attachWallEditing(args: AttachArgs) {
     h.on("modified", () => {
       onRoomChanged?.();
     });
-  });
+  };
+
+  handles.forEach(bindHandle);
+
+  const rebindNewHandles = () => {
+    handles.forEach((h: any) => {
+      if (h.__roomBound) return;
+      h.__roomBound = true;
+      bindHandle(h);
+    });
+  };
+
+  rebindNewHandles();
+
+  return { rebindNewHandles };
 }

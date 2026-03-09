@@ -1,7 +1,7 @@
 import type { Canvas, Polygon, Circle, Line } from "fabric";
 import { Circle as FabricCircle, Line as FabricLine, util } from "fabric";
 import type { Pt } from "../core/planner-types";
-import { setRoomPoints, syncHandlesToRoom } from "./room-walls";
+import { setRoomPoints } from "./room-walls";
 
 export function createRoomDrawController(args: {
   canvas: Canvas;
@@ -10,6 +10,7 @@ export function createRoomDrawController(args: {
   getGridSize: () => number;
   onRoomChanging?: () => void;
   onRoomChanged?: () => void;
+  onSyncHandles?: () => void;
   scheduleRender?: () => void;
 }) {
   const {
@@ -19,6 +20,7 @@ export function createRoomDrawController(args: {
     getGridSize,
     onRoomChanging,
     onRoomChanged,
+    onSyncHandles,
     scheduleRender,
   } = args;
 
@@ -31,11 +33,7 @@ export function createRoomDrawController(args: {
   const snap = (v: number, grid: number) => Math.round(v / grid) * grid;
 
   const getPointerPt = (opt: any): Pt | null => {
-    const p =
-      opt?.absolutePointer ??
-      opt?.pointer ??
-      opt?.scenePoint ??
-      null;
+    const p = opt?.absolutePointer ?? opt?.pointer ?? opt?.scenePoint ?? null;
 
     if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
       const g = Math.max(1, getGridSize());
@@ -67,12 +65,42 @@ export function createRoomDrawController(args: {
   let previewLines: FabricLine[] = [];
   let lastMouse: Pt | null = null;
 
+  const removeAllPreviewArtifacts = () => {
+    const objects = canvas.getObjects().slice();
+
+    for (const obj of objects as any[]) {
+      const kind = obj?.data?.kind;
+
+      if (
+        kind === "room-preview-dot" ||
+        kind === "room-preview-edge" ||
+        kind === "room-preview-live" ||
+        kind === "room-preview-line" ||
+        kind === "room-preview-rubber" ||
+        kind === "room-preview-seg"
+      ) {
+        canvas.remove(obj);
+      }
+    }
+  };
+
   const clearPreview = () => {
-    for (const ln of previewLines) canvas.remove(ln);
+    if (previewLine) {
+      canvas.remove(previewLine);
+      previewLine = null;
+    }
+
+    for (const ln of previewLines) {
+      canvas.remove(ln);
+    }
     previewLines = [];
 
-    for (const d of previewDots) canvas.remove(d);
+    for (const d of previewDots) {
+      canvas.remove(d);
+    }
     previewDots = [];
+
+    removeAllPreviewArtifacts();
   };
 
   const renderPreview = (mouse?: Pt) => {
@@ -142,10 +170,13 @@ export function createRoomDrawController(args: {
     setRoomPoints(room, pts);
     room.setCoords();
 
-    syncHandlesToRoom(handlesRef.current as any, room);
+    onSyncHandles?.();
 
     clearPreview();
+    removeAllPreviewArtifacts();
+
     pts = [];
+    lastMouse = null;
 
     onRoomChanged?.();
     scheduleRender?.() ?? canvas.requestRenderAll();
@@ -154,11 +185,14 @@ export function createRoomDrawController(args: {
 
   const cancel = () => {
     clearPreview();
+    removeAllPreviewArtifacts();
+
     pts = [];
+    lastMouse = null;
+
     scheduleRender?.() ?? canvas.requestRenderAll();
     stop();
   };
-
 
   const onMouseMove = (opt: any) => {
     if (!active) return;
@@ -179,7 +213,7 @@ export function createRoomDrawController(args: {
     pts.push(p);
 
     onRoomChanging?.();
-    renderPreview(lastMouse ?? p); // <-- key
+    renderPreview(lastMouse ?? p);
   };
 
   const onDblClick = () => {
@@ -221,13 +255,12 @@ export function createRoomDrawController(args: {
     canvas.discardActiveObject();
 
     canvas.selection = false;
-    (canvas as any).skipTargetFind = true; // 🔥 key for drawing
+    (canvas as any).skipTargetFind = true;
 
-    // also disable room itself, otherwise Fabric still tries to target it
+
     room.selectable = false;
     (room as any).evented = false;
 
-    // disable everything else
     canvas.forEachObject((o: any) => {
       if (o === room) return;
       o.selectable = false;
@@ -267,6 +300,8 @@ export function createRoomDrawController(args: {
     });
 
     clearPreview();
+    removeAllPreviewArtifacts();
+    lastMouse = null;
     scheduleRender?.() ?? canvas.requestRenderAll();
   };
   const isActive = () => active;

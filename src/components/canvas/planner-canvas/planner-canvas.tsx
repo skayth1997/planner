@@ -76,6 +76,7 @@ import { createCanvasActions } from "./actions/canvas-actions";
 type SelectionController = ReturnType<typeof createSelectionController>;
 type GridController = ReturnType<typeof createGridController>;
 type HistoryController = ReturnType<typeof createHistoryController>;
+type WallEditingController = ReturnType<typeof attachWallEditing>;
 
 function limitFurnitureSizeToRoomBBox(obj: any, room: Polygon, padding = 0) {
   const roomRect = room.getBoundingRect(false, true);
@@ -101,7 +102,7 @@ function limitFurnitureSizeToRoomBBox(obj: any, room: Polygon, padding = 0) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+  >(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -125,6 +126,7 @@ export default forwardRef<
   const selectionRef = useRef<SelectionController | null>(null);
   const gridRef = useRef<GridController | null>(null);
   const historyRef = useRef<HistoryController | null>(null);
+  const wallEditingRef = useRef<WallEditingController | null>(null);
 
   const scheduleRenderRef = useRef<null | (() => void)>(null);
 
@@ -134,11 +136,11 @@ export default forwardRef<
     null
   );
 
-  const lastTransformWasAltRef = useRef(false);
-
   const drawRoomRef = useRef<ReturnType<
     typeof createRoomDrawController
-  > | null>(null);
+    > | null>(null);
+
+  const lastTransformWasAltRef = useRef(false);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -167,6 +169,11 @@ export default forwardRef<
       nudgeDirtyRef.current = false;
       pushHistoryNow();
     }, 220);
+  };
+
+  const syncRoomHandlesNow = (canvas: Canvas, room: Polygon) => {
+    syncHandlesToRoom(roomHandlesRef.current, room, canvas);
+    wallEditingRef.current?.rebindNewHandles();
   };
 
   const getRoomSizeInternal = (): RoomSize => {
@@ -202,7 +209,7 @@ export default forwardRef<
     ];
 
     setRoomPoints(room, pts);
-    syncHandlesToRoom(roomHandlesRef.current, room);
+    syncRoomHandlesNow(canvas, room);
 
     gridRef.current?.rebuild();
     updateOpeningsForRoomChange(canvas, room as any);
@@ -264,7 +271,9 @@ export default forwardRef<
             )
             .map((p: any) => ({ x: p.x, y: p.y }));
 
-          if (pts.length >= 3) setRoomPoints(room, pts);
+          if (pts.length >= 3) {
+            setRoomPoints(room, pts);
+          }
         }
       } catch {}
     }
@@ -300,6 +309,8 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         ),
       onAfterRestore: () => {
+        syncRoomHandlesNow(canvas, room);
+
         gridRef.current?.restack();
         selectionRef.current?.restyleAllItems?.();
         clearGuides(canvas, guidesRef);
@@ -344,13 +355,14 @@ export default forwardRef<
       scheduleNudgeCommit,
     });
 
-    drawRoomRef.current = createRoomDrawController({
+    wallEditingRef.current = attachWallEditing({
       canvas,
       room,
-      handlesRef: roomHandlesRef as any,
-      getGridSize: () => getGridSize(),
-      scheduleRender,
+      handles,
+      gridSize: getGridSize(),
       onRoomChanging: () => {
+        if (drawRoomRef.current?.isActive()) return;
+
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
@@ -366,6 +378,10 @@ export default forwardRef<
         safeRender();
       },
       onRoomChanged: () => {
+        if (drawRoomRef.current?.isActive()) return;
+
+        syncRoomHandlesNow(canvas, room);
+
         fitRoomToView(canvas, room);
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
@@ -390,14 +406,18 @@ export default forwardRef<
       },
     });
 
-    attachWallEditing({
+    wallEditingRef.current.rebindNewHandles();
+
+    drawRoomRef.current = createRoomDrawController({
       canvas,
       room,
-      handles,
-      gridSize: getGridSize(),
+      handlesRef: roomHandlesRef as any,
+      getGridSize: () => getGridSize(),
+      scheduleRender,
+      onSyncHandles: () => {
+        syncRoomHandlesNow(canvas, room);
+      },
       onRoomChanging: () => {
-        if (drawRoomRef.current?.isActive()) return;
-
         grid.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
 
@@ -413,7 +433,7 @@ export default forwardRef<
         safeRender();
       },
       onRoomChanged: () => {
-        if (drawRoomRef.current?.isActive()) return;
+        syncRoomHandlesNow(canvas, room);
 
         fitRoomToView(canvas, room);
         grid.rebuild();
@@ -748,6 +768,8 @@ export default forwardRef<
       history.dispose();
       historyRef.current = null;
 
+      wallEditingRef.current = null;
+
       if (nudgeTimerRef.current) {
         window.clearTimeout(nudgeTimerRef.current);
         nudgeTimerRef.current = null;
@@ -818,7 +840,7 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         );
 
-        syncHandlesToRoom(roomHandlesRef.current, room);
+        syncRoomHandlesNow(canvas, room);
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
@@ -854,7 +876,7 @@ export default forwardRef<
           onSelectionChangeRef.current?.(null)
         );
 
-        syncHandlesToRoom(roomHandlesRef.current, room);
+        syncRoomHandlesNow(canvas, room);
 
         gridRef.current?.rebuild();
         updateOpeningsForRoomChange(canvas, room as any);
@@ -902,9 +924,11 @@ export default forwardRef<
       startDrawRoom() {
         drawRoomRef.current?.start();
       },
+
       stopDrawRoom() {
         drawRoomRef.current?.stop();
       },
+
       isDrawingRoom() {
         return !!drawRoomRef.current?.isActive();
       },
