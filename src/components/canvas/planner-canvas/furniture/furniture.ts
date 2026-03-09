@@ -1,7 +1,7 @@
 import type { Canvas, Polygon } from "fabric";
 import { Rect } from "fabric";
 
-import type { FurnitureType } from "../core/planner-types";
+import type { FurnitureType, RoomId } from "../core/planner-types";
 import { GRID_SIZE } from "../core/planner-constants";
 import { isFurniture, makeId } from "../core/utils";
 
@@ -12,6 +12,10 @@ import {
 } from "../room/polygon-geometry";
 
 import { getRoomPoints } from "../room/room-walls";
+
+function getRoomId(room: any): RoomId | undefined {
+  return room?.data?.id as RoomId | undefined;
+}
 
 function getRoomPolygonPoints(room: any) {
   return getRoomPoints(room);
@@ -39,6 +43,11 @@ function getRoomInnerAABB(room: any) {
 
 export function clampFurnitureInsideRoomPolygon(obj: any, room: Polygon) {
   if (!obj?.data || obj.data.kind !== "furniture") return;
+
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
 
   const poly = getRoomPolygonPoints(room);
   if (poly.length < 3) return;
@@ -73,6 +82,11 @@ export function clampFurnitureInsideRoomPolygonByCorners(
   room: Polygon
 ) {
   if (!isFurniture(obj)) return;
+
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
 
   const poly = getRoomPolygonPoints(room);
   if (poly.length < 3) return;
@@ -116,6 +130,11 @@ export function limitFurnitureSizeToRoomBBox(
 ) {
   if (!isFurniture(obj)) return;
 
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
+
   obj.setCoords();
 
   const box = getRoomInnerAABB(room);
@@ -152,6 +171,11 @@ export function limitFurnitureSizeToRoomBBox(
 export function snapFurnitureToRoomGrid(obj: any, room: any, grid: number) {
   if (!isFurniture(obj)) return;
 
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
+
   const box = getRoomInnerAABB(room);
 
   obj.set({
@@ -162,6 +186,11 @@ export function snapFurnitureToRoomGrid(obj: any, room: any, grid: number) {
 
 export function clampFurnitureInsideRoom(obj: any, room: any) {
   if (!isFurniture(obj)) return;
+
+  const roomId = getRoomId(room);
+  const objRoomId = obj?.data?.roomId as RoomId | undefined;
+
+  if (roomId && objRoomId && objRoomId !== roomId) return;
 
   obj.setCoords();
   const box = getRoomInnerAABB(room);
@@ -185,6 +214,7 @@ export function clampFurnitureInsideRoom(obj: any, room: any) {
 }
 
 export function addFurniture(canvas: Canvas, room: any, type: FurnitureType) {
+  const roomId = getRoomId(room);
   const box = getRoomInnerAABB(room);
 
   let width: number;
@@ -232,6 +262,7 @@ export function addFurniture(canvas: Canvas, room: any, type: FurnitureType) {
     kind: "furniture",
     type,
     id: makeId(),
+    roomId,
     baseStroke,
     baseStrokeWidth,
   };
