@@ -1,6 +1,13 @@
 import { Polygon, Circle, Canvas, Point } from "fabric";
+import type { RoomId } from "../core/planner-types";
 
 export type RoomPoint = { x: number; y: number };
+
+export type RoomRuntime = {
+  id: RoomId;
+  polygon: Polygon;
+  handles: Circle[];
+};
 
 function snap(v: number, grid: number) {
   return Math.round(v / grid) * grid;
@@ -32,7 +39,12 @@ function normalizeRoomPoints(points: RoomPoint[]) {
   };
 }
 
-function createOneCornerHandle(canvas: Canvas, p: RoomPoint, idx: number) {
+function createOneCornerHandle(
+  canvas: Canvas,
+  p: RoomPoint,
+  idx: number,
+  roomId?: RoomId
+) {
   const c = new Circle({
     left: p.x,
     top: p.y,
@@ -54,7 +66,11 @@ function createOneCornerHandle(canvas: Canvas, p: RoomPoint, idx: number) {
     hoverCursor: "pointer",
   });
 
-  (c as any).data = { kind: "room-handle", index: idx };
+  (c as any).data = {
+    kind: "room-handle",
+    index: idx,
+    roomId,
+  };
 
   canvas.add(c);
   canvas.bringObjectToFront(c);
@@ -62,8 +78,16 @@ function createOneCornerHandle(canvas: Canvas, p: RoomPoint, idx: number) {
   return c;
 }
 
-export function createRoomPolygon(canvas: Canvas) {
-  const absolutePoints: RoomPoint[] = [
+export function createRoomPolygon(
+  canvas: Canvas,
+  options?: {
+    id?: RoomId;
+    points?: RoomPoint[];
+    fill?: string;
+    stroke?: string;
+  }
+) {
+  const absolutePoints: RoomPoint[] = options?.points ?? [
     { x: 200, y: 150 },
     { x: 800, y: 150 },
     { x: 800, y: 550 },
@@ -83,8 +107,8 @@ export function createRoomPolygon(canvas: Canvas) {
     height,
     pathOffset: new Point(width / 2, height / 2),
 
-    fill: "rgba(59,130,246,0.15)",
-    stroke: "#3b82f6",
+    fill: options?.fill ?? "rgba(59,130,246,0.15)",
+    stroke: options?.stroke ?? "#3b82f6",
     strokeWidth: 3,
     selectable: false,
     evented: false,
@@ -92,10 +116,38 @@ export function createRoomPolygon(canvas: Canvas) {
     perPixelTargetFind: false,
   });
 
-  (room as any).data = { kind: "room" };
+  (room as any).data = {
+    kind: "room",
+    id: options?.id,
+  };
 
   canvas.add(room);
   return room;
+}
+
+export function createRoomRuntime(
+  canvas: Canvas,
+  options: {
+    id: RoomId;
+    points?: RoomPoint[];
+    fill?: string;
+    stroke?: string;
+  }
+): RoomRuntime {
+  const polygon = createRoomPolygon(canvas, {
+    id: options.id,
+    points: options.points,
+    fill: options.fill,
+    stroke: options.stroke,
+  });
+
+  const handles = createCornerHandles(canvas, polygon, options.id);
+
+  return {
+    id: options.id,
+    polygon,
+    handles,
+  };
 }
 
 export function getRoomPoints(room: Polygon): RoomPoint[] {
@@ -128,9 +180,13 @@ export function setRoomPoints(room: Polygon, points: RoomPoint[]) {
   room.setCoords();
 }
 
-export function createCornerHandles(canvas: Canvas, room: Polygon) {
+export function createCornerHandles(
+  canvas: Canvas,
+  room: Polygon,
+  roomId?: RoomId
+) {
   const pts = getRoomPoints(room);
-  return pts.map((p, idx) => createOneCornerHandle(canvas, p, idx));
+  return pts.map((p, idx) => createOneCornerHandle(canvas, p, idx, roomId));
 }
 
 export function syncHandlesToRoom(
@@ -139,10 +195,11 @@ export function syncHandlesToRoom(
   canvas?: Canvas
 ) {
   const pts = getRoomPoints(room);
+  const roomId = (room as any)?.data?.id as RoomId | undefined;
 
   if (canvas && handles.length < pts.length) {
     for (let i = handles.length; i < pts.length; i++) {
-      handles.push(createOneCornerHandle(canvas, pts[i], i));
+      handles.push(createOneCornerHandle(canvas, pts[i], i, roomId));
     }
   }
 
@@ -164,6 +221,7 @@ export function syncHandlesToRoom(
       ...(h as any).data,
       kind: "room-handle",
       index: i,
+      roomId,
     };
 
     h.setCoords();
@@ -191,8 +249,13 @@ export function attachWallEditing(args: AttachArgs) {
     onRoomChanged,
   } = args;
 
+  const roomId = (room as any)?.data?.id as RoomId | undefined;
+
   const bindHandle = (h: Circle) => {
     h.on("moving", () => {
+      const handleRoomId = (h as any).data?.roomId;
+      if (roomId && handleRoomId && handleRoomId !== roomId) return;
+
       const idx = (h as any).data?.index ?? 0;
 
       const pts = getRoomPoints(room);
