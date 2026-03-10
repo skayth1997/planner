@@ -36,9 +36,18 @@ const btnDark =
 const btnDisabled =
   "opacity-40 cursor-not-allowed hover:bg-inherit hover:border-inherit active:bg-inherit";
 
+type RoomListItem = {
+  id: string;
+  name?: string;
+};
+
 export default function HomePage() {
   const canvasRef = useRef<PlannerCanvasHandle | null>(null);
+
   const [selected, setSelected] = useState<SelectedInfo | null>(null);
+
+  const [rooms, setRooms] = useState<RoomListItem[]>([]);
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
 
   const [w, setW] = useState<string>("");
   const [h, setH] = useState<string>("");
@@ -53,10 +62,24 @@ export default function HomePage() {
   const [gridSize, setGridSize] = useState<number>(GRID_SIZE);
 
   const [hinge, setHinge] = useState<"start" | "end">("start");
-
   const [isOpen, setIsOpen] = useState(false);
-
   const [isDrawingWalls, setIsDrawingWalls] = useState(false);
+
+  const syncRoomsFromCanvas = useCallback(() => {
+    const nextRooms = canvasRef.current?.getRooms?.() ?? [];
+    const nextActiveRoomId = canvasRef.current?.getActiveRoomId?.() ?? null;
+
+    setRooms(nextRooms);
+    setActiveRoomId(nextActiveRoomId);
+  }, []);
+
+  const syncRoomFromCanvas = useCallback(() => {
+    const size = canvasRef.current?.getRoomSize();
+    if (!size) return;
+
+    setRoomW(String(Math.round(size.width)));
+    setRoomH(String(Math.round(size.height)));
+  }, []);
 
   const onSelectionChange = useCallback((info: SelectedInfo | null) => {
     setSelected(info);
@@ -69,11 +92,11 @@ export default function HomePage() {
       return;
     }
 
-    if (info?.hinge) {
+    if (info.hinge) {
       setHinge(info.hinge);
     }
 
-    if (info?.isOpen !== undefined) {
+    if (info.isOpen !== undefined) {
       setIsOpen(info.isOpen);
     }
 
@@ -95,7 +118,7 @@ export default function HomePage() {
       width: Number.isFinite(nextW) ? nextW : undefined,
       height: Number.isFinite(nextH) ? nextH : undefined,
       angle: Number.isFinite(nextA) ? nextA : undefined,
-      hinge: selected?.type === "door" ? hinge : undefined,
+      hinge: selected.type === "door" ? hinge : undefined,
     });
   };
 
@@ -113,13 +136,20 @@ export default function HomePage() {
       width: wNum,
       height: hNum,
     });
+
+    syncRoomFromCanvas();
   };
 
-  const syncRoomFromCanvas = () => {
-    const size = canvasRef.current?.getRoomSize();
-    if (!size) return;
-    setRoomW(String(Math.round(size.width)));
-    setRoomH(String(Math.round(size.height)));
+  const addRoom = () => {
+    canvasRef.current?.addRoom?.();
+    syncRoomsFromCanvas();
+    syncRoomFromCanvas();
+  };
+
+  const switchRoom = (roomId: string) => {
+    canvasRef.current?.setActiveRoom?.(roomId);
+    syncRoomsFromCanvas();
+    syncRoomFromCanvas();
   };
 
   useEffect(() => {
@@ -136,9 +166,18 @@ export default function HomePage() {
   }, [gridVisible, gridSize]);
 
   useEffect(() => {
-    canvasRef.current?.setGridVisible(gridVisible);
-    canvasRef.current?.setGridSize(gridSize);
+    canvasRef.current?.setGridVisible?.(gridVisible);
+    canvasRef.current?.setGridSize?.(gridSize);
   }, [gridVisible, gridSize]);
+
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      syncRoomsFromCanvas();
+      syncRoomFromCanvas();
+    });
+
+    return () => window.cancelAnimationFrame(id);
+  }, [syncRoomsFromCanvas, syncRoomFromCanvas]);
 
   return (
     <main className="w-screen h-dvh overflow-hidden bg-neutral-100">
@@ -219,6 +258,46 @@ export default function HomePage() {
                   </button>
                 )}
               </div>
+
+              <div className="mt-2">
+                <button
+                  className={cls(btnBase, btnPrimary, "w-full")}
+                  onClick={addRoom}
+                >
+                  Add room
+                </button>
+              </div>
+            </div>
+
+            {/* ROOMS */}
+            <div className="rounded-lg border border-neutral-200 bg-white p-3">
+              <div className="mb-2 text-sm font-semibold text-neutral-700">
+                Rooms
+              </div>
+
+              {rooms.length === 0 ? (
+                <p className="text-sm text-neutral-500">No rooms yet.</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {rooms.map((room, index) => {
+                    const isActive = activeRoomId === room.id;
+
+                    return (
+                      <button
+                        key={room.id}
+                        className={cls(
+                          btnBase,
+                          isActive ? btnDark : btnNeutral,
+                          "w-full text-left"
+                        )}
+                        onClick={() => switchRoom(room.id)}
+                      >
+                        {room.name ?? `Room ${index + 1}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* GRID */}
@@ -234,7 +313,7 @@ export default function HomePage() {
                   onChange={(e) => {
                     const v = e.target.checked;
                     setGridVisible(v);
-                    canvasRef.current?.setGridVisible(v);
+                    canvasRef.current?.setGridVisible?.(v);
                   }}
                 />
                 Show grid
@@ -248,7 +327,7 @@ export default function HomePage() {
                   onChange={(e) => {
                     const size = Number(e.target.value);
                     setGridSize(size);
-                    canvasRef.current?.setGridSize(size);
+                    canvasRef.current?.setGridSize?.(size);
                   }}
                 >
                   {[10, 20, 25, 50, 100].map((s) => (
