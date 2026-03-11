@@ -6,7 +6,7 @@ import React, {
   useImperativeHandle,
   useRef,
 } from "react";
-import { Canvas, Polygon, Point, Line, Path } from "fabric";
+import { Canvas, Polygon, Point, Path, Pattern } from "fabric";
 
 import {
   GRID_SIZE,
@@ -35,12 +35,12 @@ type RoomVisual = {
   id: string;
   outer: Polygon;
   inner: Polygon;
-  wallFill: Polygon;
-  hatches: Line[];
+  wallBand: Path;
 };
 
 const WALL_THICKNESS = 20;
-const HATCH_SPACING = 7;
+
+let cachedWallPatternSource: HTMLCanvasElement | null = null;
 
 function normalizeRoomPoints(points: Pt[]) {
   const xs = points.map((p) => p.x);
@@ -160,114 +160,87 @@ function fitObjectsToView(canvas: Canvas, objects: Polygon[], padding = 40) {
   canvas.requestRenderAll();
 }
 
-function createAbsoluteClipPolygon(points: Pt[]) {
-  return new Polygon(points as any, {
-    absolutePositioned: true,
-    selectable: false,
-    evented: false,
-    objectCaching: false,
-  });
+function pointsToPath(points: Pt[]) {
+  if (!points.length) return "";
+
+  const [first, ...rest] = points;
+  return (
+    `M ${first.x} ${first.y} ` +
+    rest.map((p) => `L ${p.x} ${p.y}`).join(" ") +
+    " Z"
+  );
 }
 
-function createWallBandClipPath(outerPoints: Pt[], innerPoints: Pt[]) {
-  const outerPath = outerPoints.map((p) => `${p.x} ${p.y}`).join(" L ");
-  const innerPath = [...innerPoints]
-    .reverse()
-    .map((p) => `${p.x} ${p.y}`)
-    .join(" L ");
+function getWallPatternSource() {
+  if (cachedWallPatternSource) return cachedWallPatternSource;
 
-  return new Path(`M ${outerPath} Z M ${innerPath} Z`, {
-    absolutePositioned: true,
-    selectable: false,
-    evented: false,
-    objectCaching: false,
-    fill: "#000",
-    excludeFromExport: true,
-  });
+  const size = 10;
+
+  const patternCanvas = document.createElement("canvas");
+  patternCanvas.width = size;
+  patternCanvas.height = size;
+
+  const ctx = patternCanvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, size, size);
+
+  ctx.strokeStyle = "rgba(17,24,39,0.7)";
+
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, size);
+  ctx.lineTo(size, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(-size, size);
+  ctx.lineTo(0, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(size, size);
+  ctx.lineTo(size * 2, 0);
+  ctx.stroke();
+
+  cachedWallPatternSource = patternCanvas;
+  return patternCanvas;
 }
 
-function createWallFillPolygon(outerPoints: Pt[]) {
-  const wallFill = new Polygon([], {
-    fill: "#fff",
+function createWallBandPath(outerPoints: Pt[], innerPoints: Pt[]) {
+  const outerPath = pointsToPath(outerPoints);
+  const innerPath = pointsToPath([...innerPoints].reverse());
+
+  const patternSource = getWallPatternSource();
+
+  return new Path(`${outerPath} ${innerPath}`, {
+    fill: patternSource
+      ? new Pattern({
+          source: patternSource,
+          repeat: "repeat",
+        })
+      : "#f4f2ec",
     strokeWidth: 0,
     selectable: false,
     evented: false,
-    objectCaching: false,
-    perPixelTargetFind: false,
+    objectCaching: true,
   });
-
-  applyPolygonAbsolutePoints(wallFill, outerPoints);
-
-  return wallFill;
-}
-
-function createWallHatches(
-  outerPoints: Pt[],
-  innerPoints: Pt[],
-  roomId: string
-): Line[] {
-  const xs = outerPoints.map((p) => p.x);
-  const ys = outerPoints.map((p) => p.y);
-
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
-
-  const width = maxX - minX;
-  const height = maxY - minY;
-  const overscan = Math.max(width, height) + 400;
-
-  const wallBandClip = createWallBandClipPath(outerPoints, innerPoints);
-  const lines: Line[] = [];
-
-  for (
-    let offset = minX - overscan;
-    offset <= maxX + overscan;
-    offset += HATCH_SPACING
-  ) {
-    const x1 = offset;
-    const y1 = maxY + overscan;
-
-    const x2 = offset + overscan;
-    const y2 = maxY - overscan;
-
-    const line = new Line([x1, y1, x2, y2], {
-      stroke: "#000",
-      strokeWidth: 1,
-      selectable: false,
-      evented: false,
-      objectCaching: false,
-      excludeFromExport: true,
-      strokeUniform: true,
-    });
-
-    (line as any).clipPath = wallBandClip;
-    (line as any).data = {
-      kind: "room-hatch",
-      roomId,
-    };
-
-    lines.push(line);
-  }
-
-  return lines;
 }
 
 function createRoomVisual(points: Pt[], roomId: string): RoomVisual {
   const cleanPoints = removeClosingPoint(points);
   const innerPoints = insetPolygon(cleanPoints, WALL_THICKNESS);
 
-  const wallFill = createWallFillPolygon(cleanPoints);
+  const wallBand = createWallBandPath(cleanPoints, innerPoints);
 
   const outer = new Polygon([], {
     fill: "transparent",
     stroke: "#111827",
-    strokeWidth: 2,
+    strokeWidth: 1.8,
     strokeLineJoin: "miter",
     selectable: false,
     evented: false,
-    objectCaching: false,
+    objectCaching: true,
     perPixelTargetFind: false,
     strokeUniform: true,
   });
@@ -281,13 +254,13 @@ function createRoomVisual(points: Pt[], roomId: string): RoomVisual {
   applyPolygonAbsolutePoints(outer, cleanPoints);
 
   const inner = new Polygon([], {
-    fill: "#fff",
+    fill: "#ffffff",
     stroke: "#111827",
-    strokeWidth: 2,
+    strokeWidth: 1.8,
     strokeLineJoin: "miter",
     selectable: false,
     evented: false,
-    objectCaching: false,
+    objectCaching: true,
     perPixelTargetFind: false,
     strokeUniform: true,
   });
@@ -301,14 +274,11 @@ function createRoomVisual(points: Pt[], roomId: string): RoomVisual {
 
   applyPolygonAbsolutePoints(inner, innerPoints);
 
-  const hatches = createWallHatches(cleanPoints, innerPoints, roomId);
-
   return {
     id: roomId,
     outer,
     inner,
-    wallFill,
-    hatches,
+    wallBand,
   };
 }
 
@@ -316,43 +286,29 @@ function updateRoomVisual(room: RoomVisual, points: Pt[]) {
   const cleanPoints = removeClosingPoint(points);
   const innerPoints = insetPolygon(cleanPoints, WALL_THICKNESS);
 
-  applyPolygonAbsolutePoints(room.wallFill, cleanPoints, {
-    fill: "#f4f2ec",
-    strokeWidth: 0,
-  });
-
   applyPolygonAbsolutePoints(room.outer, cleanPoints, {
     fill: "transparent",
     stroke: "#111827",
-    strokeWidth: 2,
+    strokeWidth: 1.8,
   });
 
   applyPolygonAbsolutePoints(room.inner, innerPoints, {
-    fill: "#f3f4f6",
+    fill: "#ffffff",
     stroke: "#111827",
-    strokeWidth: 2,
+    strokeWidth: 1.8,
   });
 
-  room.hatches = createWallHatches(cleanPoints, innerPoints, room.id);
+  room.wallBand = createWallBandPath(cleanPoints, innerPoints);
 }
 
 function removeRoomVisual(canvas: Canvas, room: RoomVisual) {
-  for (const hatch of room.hatches) {
-    canvas.remove(hatch);
-  }
-
   canvas.remove(room.inner);
   canvas.remove(room.outer);
-  canvas.remove(room.wallFill);
+  canvas.remove(room.wallBand);
 }
 
 function addRoomVisualToCanvas(canvas: Canvas, room: RoomVisual) {
-  canvas.add(room.wallFill);
-
-  for (const hatch of room.hatches) {
-    canvas.add(hatch);
-  }
-
+  canvas.add(room.wallBand);
   canvas.add(room.outer);
   canvas.add(room.inner);
 
@@ -363,7 +319,7 @@ function addRoomVisualToCanvas(canvas: Canvas, room: RoomVisual) {
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
-  >(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -373,7 +329,7 @@ export default forwardRef<
   const gridRef = useRef<GridController | null>(null);
   const drawRoomRef = useRef<ReturnType<
     typeof createRoomDrawController
-    > | null>(null);
+  > | null>(null);
 
   const scheduleRenderRef = useRef<null | (() => void)>(null);
   const isSpacePressedRef = useRef(false);
@@ -542,9 +498,13 @@ export default forwardRef<
     ref,
     () => ({
       addFurniture(_: FurnitureType) {},
+
       deleteSelected() {},
+
       duplicateSelected() {},
+
       setSelectedProps() {},
+
       toggleSelectedDoor() {},
 
       fitRoom() {
@@ -559,10 +519,15 @@ export default forwardRef<
       },
 
       undo() {},
+
       redo() {},
+
       save() {},
+
       load() {},
+
       exportJson() {},
+
       importJsonString() {},
 
       getRoomSize() {
@@ -582,6 +547,7 @@ export default forwardRef<
       },
 
       addDoor() {},
+
       addWindow() {},
 
       isDrawingRoom() {
