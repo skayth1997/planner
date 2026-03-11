@@ -7,10 +7,18 @@ type Args = {
   zoom: { min: number; max: number; sensitivity: number };
   scheduleRender: () => void;
   onPanEnd?: () => void;
+  onViewportChange?: () => void;
 };
 
 export function attachMouseController(args: Args) {
-  const { canvas, isSpacePressedRef, zoom, scheduleRender, onPanEnd } = args;
+  const {
+    canvas,
+    isSpacePressedRef,
+    zoom,
+    scheduleRender,
+    onPanEnd,
+    onViewportChange,
+  } = args;
 
   let isPanning = false;
   let lastClientX = 0;
@@ -65,6 +73,7 @@ export function attachMouseController(args: Args) {
     lastClientY = cy;
 
     canvas.relativePan(new Point(dx, dy));
+    onViewportChange?.();
     scheduleRender();
   };
 
@@ -86,20 +95,17 @@ export function attachMouseController(args: Args) {
     const upperCanvas = canvas.upperCanvasEl;
     const rect = upperCanvas.getBoundingClientRect();
 
-    const pointer = new Point(
-      e.clientX - rect.left,
-      e.clientY - rect.top
-    );
+    const pointer = new Point(e.clientX - rect.left, e.clientY - rect.top);
 
     const currentZoom = canvas.getZoom();
 
     let nextZoom = currentZoom * Math.pow(zoom.sensitivity, e.deltaY);
-
     nextZoom = Math.max(zoom.min, Math.min(zoom.max, nextZoom));
 
     if (nextZoom === currentZoom) return;
 
     canvas.zoomToPoint(pointer, nextZoom);
+    onViewportChange?.();
     scheduleRender();
   };
 

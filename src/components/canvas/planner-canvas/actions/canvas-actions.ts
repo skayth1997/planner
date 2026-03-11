@@ -50,6 +50,7 @@ type HistoryController = {
 type Deps = {
   getCanvas: () => Canvas | null;
   getRoom: () => Polygon | null;
+  getRoomById?: (roomId: string | null | undefined) => Polygon | null;
 
   getGridSize: () => number;
   safeRender: () => void;
@@ -109,6 +110,16 @@ export function createCanvasActions(deps: Deps) {
     return (
       sel?.getSelectedObjects?.() ?? sel?.getSelectedFurnitureObjects?.() ?? []
     );
+  };
+
+  const getOwnerRoom = (obj: any) => {
+    const roomId = obj?.data?.roomId;
+    return deps.getRoomById?.(roomId) ?? deps.getRoom();
+  };
+
+  const getActiveRoomId = () => {
+    const room = deps.getRoom() as any;
+    return (room?.data?.id as string | undefined) ?? null;
   };
 
   const deleteSelected = () => {
@@ -185,6 +196,7 @@ export function createCanvasActions(deps: Deps) {
                 kind: "furniture",
                 type: o.data?.type ?? "unknown",
                 id: o.data?.id ?? makeId(),
+                roomId: o.data?.roomId ?? getActiveRoomId(),
                 baseStroke: o.data?.baseStroke ?? "#10b981",
                 baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
               },
@@ -206,9 +218,17 @@ export function createCanvasActions(deps: Deps) {
               kind: "opening",
               type: o.data?.type ?? "door",
               id: o.data?.id ?? makeId(),
+              roomId: o.data?.roomId ?? getActiveRoomId(),
+              wallId: o.data?.wallId,
               segIndex: Number(o.data?.segIndex) || 0,
               t: typeof o.data?.t === "number" ? o.data.t : 0.5,
               offset: typeof o.data?.offset === "number" ? o.data.offset : 0,
+              hinge: o.data?.hinge,
+              isOpen: !!o.data?.isOpen,
+              baseStroke:
+                o.data?.baseStroke ??
+                (o.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
+              baseStrokeWidth: o.data?.baseStrokeWidth ?? 2,
             },
           } as any;
         }
@@ -217,18 +237,22 @@ export function createCanvasActions(deps: Deps) {
 
   const pasteFromClipboard = () => {
     const canvas = deps.getCanvas();
-    const room = deps.getRoom();
-    if (!canvas || !room) return;
+    const activeRoom = deps.getRoom();
+    if (!canvas || !activeRoom) return;
 
     const snaps = deps.clipboardRef.current;
     if (!snaps || snaps.length === 0) return;
 
     const grid = deps.getGridSize();
     const clones: Rect[] = [];
+    const activeRoomId = getActiveRoomId();
 
     for (const snap of snaps) {
       if ((snap as any).data?.kind === "furniture") {
         const s: any = snap;
+        const targetRoom = deps.getRoomById?.(s.data?.roomId) ?? activeRoom;
+        const targetRoomId =
+          (targetRoom as any)?.data?.id ?? activeRoomId ?? null;
 
         const rect = new Rect({
           left: (s.left ?? 0) + grid,
@@ -259,15 +283,16 @@ export function createCanvasActions(deps: Deps) {
           kind: "furniture",
           type: s.data?.type ?? "unknown",
           id: makeId(),
+          roomId: targetRoomId,
           baseStroke: s.data?.baseStroke ?? "#10b981",
           baseStrokeWidth: s.data?.baseStrokeWidth ?? 2,
         };
 
         canvas.add(rect);
 
-        clampFurnitureInsideRoomPolygon(rect as any, room as any);
-        clampFurnitureInsideRoom(rect as any, room as any);
-        snapFurnitureToRoomGrid(rect as any, room as any, grid);
+        clampFurnitureInsideRoomPolygon(rect as any, targetRoom as any);
+        clampFurnitureInsideRoom(rect as any, targetRoom as any);
+        snapFurnitureToRoomGrid(rect as any, targetRoom as any, grid);
 
         rect.setCoords();
         clones.push(rect);
@@ -276,6 +301,9 @@ export function createCanvasActions(deps: Deps) {
 
       if ((snap as any).data?.kind === "opening") {
         const s: any = snap;
+        const targetRoom = deps.getRoomById?.(s.data?.roomId) ?? activeRoom;
+        const targetRoomId =
+          (targetRoom as any)?.data?.id ?? activeRoomId ?? null;
 
         const rect = new Rect({
           left: (s.left ?? 0) + grid,
@@ -309,9 +337,13 @@ export function createCanvasActions(deps: Deps) {
           kind: "opening",
           type: s.data?.type ?? "door",
           id: makeId(),
+          roomId: targetRoomId,
+          wallId: s.data?.wallId,
           segIndex: Number(s.data?.segIndex) || 0,
           t: typeof s.data?.t === "number" ? s.data.t : 0.5,
           offset: typeof s.data?.offset === "number" ? s.data.offset : 0,
+          hinge: s.data?.hinge,
+          isOpen: !!s.data?.isOpen,
           baseStroke:
             s.data?.baseStroke ??
             (s.data?.type === "window" ? "#3b82f6" : "#f59e0b"),
@@ -319,7 +351,7 @@ export function createCanvasActions(deps: Deps) {
         };
 
         canvas.add(rect);
-        snapOpeningToNearestWall(rect as any, room as any);
+        snapOpeningToNearestWall(rect as any, targetRoom as any);
 
         rect.setCoords();
         clones.push(rect);
@@ -328,6 +360,7 @@ export function createCanvasActions(deps: Deps) {
     }
 
     canvas.discardActiveObject();
+
     if (clones.length === 1) {
       canvas.setActiveObject(clones[0]);
     } else if (clones.length > 1) {
@@ -353,13 +386,15 @@ export function createCanvasActions(deps: Deps) {
 
   const nudgeSelected = (dx: number, dy: number, skipClamp = false) => {
     const canvas = deps.getCanvas();
-    const room = deps.getRoom();
-    if (!canvas || !room) return;
+    if (!canvas) return;
 
     const selected = getSelectedObjects();
     if (selected.length === 0) return;
 
     for (const o of selected) {
+      const room = getOwnerRoom(o);
+      if (!room) continue;
+
       o.set({ left: (o.left ?? 0) + dx, top: (o.top ?? 0) + dy });
       o.setCoords();
 
@@ -400,13 +435,15 @@ export function createCanvasActions(deps: Deps) {
     hinge?: "start" | "end";
   }) => {
     const canvas = deps.getCanvas();
-    const room = deps.getRoom();
-    if (!canvas || !room) return;
+    if (!canvas) return;
 
     const active = canvas.getActiveObject() as any;
     if (!active) return;
 
     if (Array.isArray(active?._objects)) return;
+
+    const room = getOwnerRoom(active);
+    if (!room) return;
 
     const isF = isFurniture(active);
     const isO = isOpening(active);
@@ -468,7 +505,8 @@ export function createCanvasActions(deps: Deps) {
     const room = deps.getRoom();
     if (!canvas || !room) return;
 
-    addFurniture(canvas, room as any, type);
+    const activeRoomId = getActiveRoomId();
+    addFurniture(canvas, room as any, type, activeRoomId ?? undefined);
     restyleAll();
     pushHistoryNow();
   };
@@ -478,7 +516,8 @@ export function createCanvasActions(deps: Deps) {
     const room = deps.getRoom();
     if (!canvas || !room) return;
 
-    addDoor(canvas, room as any);
+    const activeRoomId = getActiveRoomId();
+    addDoor(canvas, room as any, activeRoomId ?? undefined);
     deps.grid()?.restack();
     pushHistoryNow();
     deps.safeRender();
@@ -489,7 +528,8 @@ export function createCanvasActions(deps: Deps) {
     const room = deps.getRoom();
     if (!canvas || !room) return;
 
-    addWindow(canvas, room as any);
+    const activeRoomId = getActiveRoomId();
+    addWindow(canvas, room as any, activeRoomId ?? undefined);
     deps.grid()?.restack();
     pushHistoryNow();
     deps.safeRender();
@@ -500,11 +540,13 @@ export function createCanvasActions(deps: Deps) {
 
   const toggleSelectedDoor = () => {
     const canvas = deps.getCanvas();
-    const room = deps.getRoom();
-    if (!canvas || !room) return;
+    if (!canvas) return;
 
     const active = canvas.getActiveObject() as any;
     if (!active) return;
+
+    const room = getOwnerRoom(active);
+    if (!room) return;
 
     if (isOpening(active) && active.data?.type === "door") {
       toggleDoorOpen(active, room as any);

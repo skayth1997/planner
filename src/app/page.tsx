@@ -156,8 +156,16 @@ export default function HomePage() {
     const v = localStorage.getItem("planner:gridVisible");
     const s = localStorage.getItem("planner:gridSize");
 
-    if (v != null) setGridVisible(v === "true");
-    if (s != null) setGridSize(Number(s) || 50);
+    if (v != null) {
+      setGridVisible(v === "true");
+    }
+
+    if (s != null) {
+      const parsed = Number(s);
+      if (Number.isFinite(parsed) && parsed > 5) {
+        setGridSize(parsed);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -243,7 +251,7 @@ export default function HomePage() {
                       setIsDrawingWalls(true);
                     }}
                   >
-                    Draw walls
+                    Draw room
                   </button>
                 ) : (
                   <button
@@ -257,15 +265,6 @@ export default function HomePage() {
                     Finish drawing
                   </button>
                 )}
-              </div>
-
-              <div className="mt-2">
-                <button
-                  className={cls(btnBase, btnPrimary, "w-full")}
-                  onClick={addRoom}
-                >
-                  Add room
-                </button>
               </div>
             </div>
 
@@ -330,7 +329,7 @@ export default function HomePage() {
                     canvasRef.current?.setGridSize?.(size);
                   }}
                 >
-                  {[10, 20, 25, 50, 100].map((s) => (
+                  {[10, 20, 30, 40, 50, 100].map((s) => (
                     <option key={s} value={s}>
                       {s}px
                     </option>

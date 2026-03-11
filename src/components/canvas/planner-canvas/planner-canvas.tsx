@@ -6,218 +6,209 @@ import React, {
   useImperativeHandle,
   useRef,
 } from "react";
-import { Canvas, Polygon, Circle } from "fabric";
+import { Canvas, Polygon, Point } from "fabric";
 
 import {
   GRID_SIZE,
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_SENSITIVITY,
-  STORAGE_KEY,
-  STORAGE_ROOM_KEY,
 } from "./core/planner-constants";
 
 import type {
   PlannerCanvasHandle,
   SelectedInfo,
   FurnitureType,
-  GuideLine,
   RoomSize,
-  CanvasSnapshotItem,
+  Pt,
 } from "./core/planner-types";
 
-import { isFurniture } from "./core/utils";
-
-import {
-  clampFurnitureInsideRoom,
-  clampFurnitureInsideRoomPolygon,
-  snapFurnitureToRoomGrid,
-} from "./furniture/furniture";
-
-import { fitRoomToView } from "./room/fit";
-import { alignAndGuide, clearGuides } from "./selection/guides";
-import { serializeState, restoreFromJson } from "./history/history";
-
-import {
-  saveNow,
-  loadNow,
-  exportJson as exportJsonFile,
-  importJsonString as importJson,
-} from "./persistence/persistence";
-
-import {
-  createRoomRuntime,
-  attachWallEditing,
-  getRoomPoints,
-  setRoomPoints,
-  syncHandlesToRoom,
-} from "./room/room-walls";
-import type { RoomRuntime } from "./room/room-walls";
-
 import { createRoomDrawController } from "./room/room-draw";
-
 import { createRenderScheduler } from "./core/render";
-
-import {
-  isOpening,
-  snapOpeningToNearestWall,
-  updateOpeningsForRoomChange,
-  toggleDoorOpen,
-} from "./openings/openings";
-
-import { attachKeyboardController } from "./input/keyboard-controller";
 import { attachMouseController } from "./input/mouse-controller";
-import { createSelectionController } from "./selection/selection-controller";
 import { createGridController } from "./grid/grid-controller";
-import { createHistoryController } from "./history/history-controller";
 
-import { createCanvasActions } from "./actions/canvas-actions";
-
-type SelectionController = ReturnType<typeof createSelectionController>;
 type GridController = ReturnType<typeof createGridController>;
-type HistoryController = ReturnType<typeof createHistoryController>;
-type WallEditingController = ReturnType<typeof attachWallEditing>;
 
-function limitFurnitureSizeToRoomBBox(obj: any, room: Polygon, padding = 0) {
-  const roomRect = room.getBoundingRect(false, true);
+function normalizeRoomPoints(points: Pt[]) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
 
-  const maxW = Math.max(10, roomRect.width - padding * 2);
-  const maxH = Math.max(10, roomRect.height - padding * 2);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
 
-  const r = obj.getBoundingRect(false, true);
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
 
-  if (r.width > maxW) {
-    const f = maxW / Math.max(1, r.width);
-    obj.scaleX = (obj.scaleX ?? 1) * f;
+  const localPoints = points.map((p) => ({
+    x: p.x - minX,
+    y: p.y - minY,
+  }));
+
+  return {
+    left: minX,
+    top: minY,
+    width,
+    height,
+    localPoints,
+  };
+}
+
+function removeClosingPoint(points: Pt[]) {
+  if (points.length < 2) return points;
+
+  const first = points[0];
+  const last = points[points.length - 1];
+
+  if (first.x === last.x && first.y === last.y) {
+    return points.slice(0, -1);
   }
 
-  if (r.height > maxH) {
-    const f = maxH / Math.max(1, r.height);
-    obj.scaleY = (obj.scaleY ?? 1) * f;
+  return points;
+}
+
+function createRoomPolygonFromPoints(points: Pt[], roomId: string) {
+  const cleanPoints = removeClosingPoint(points);
+  const { left, top, width, height, localPoints } = normalizeRoomPoints(
+    cleanPoints
+  );
+
+  const room = new Polygon(localPoints as any, {
+    left,
+    top,
+    originX: "left",
+    originY: "top",
+    width,
+    height,
+    pathOffset: new Point(width / 2, height / 2),
+
+    fill: "rgba(59,130,246,0.15)",
+    stroke: "#3b82f6",
+    strokeWidth: 3,
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+    perPixelTargetFind: false,
+  });
+
+  (room as any).data = {
+    kind: "room",
+    id: roomId,
+  };
+
+  return room;
+}
+
+function getRoomAbsoluteBounds(room: Polygon) {
+  const r = room.getBoundingRect();
+  return {
+    left: r.left,
+    top: r.top,
+    right: r.left + r.width,
+    bottom: r.top + r.height,
+    width: r.width,
+    height: r.height,
+  };
+}
+
+function fitObjectsToView(canvas: Canvas, objects: Polygon[], padding = 40) {
+  if (!objects.length) return;
+
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+
+  for (const obj of objects) {
+    const r = getRoomAbsoluteBounds(obj);
+    left = Math.min(left, r.left);
+    top = Math.min(top, r.top);
+    right = Math.max(right, r.right);
+    bottom = Math.max(bottom, r.bottom);
   }
 
-  obj.setCoords();
+  const contentWidth = Math.max(1, right - left);
+  const contentHeight = Math.max(1, bottom - top);
+
+  const viewWidth = canvas.getWidth();
+  const viewHeight = canvas.getHeight();
+
+  canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+
+  const scaleX = (viewWidth - padding * 2) / contentWidth;
+  const scaleY = (viewHeight - padding * 2) / contentHeight;
+  const zoom = Math.min(scaleX, scaleY, 1);
+
+  canvas.setZoom(zoom);
+
+  const vpt = canvas.viewportTransform!;
+  const centerX = left + contentWidth / 2;
+  const centerY = top + contentHeight / 2;
+
+  vpt[4] = viewWidth / 2 - centerX * zoom;
+  vpt[5] = viewHeight / 2 - centerY * zoom;
+
+  canvas.setViewportTransform(vpt);
+  canvas.requestRenderAll();
 }
 
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
+  const roomsRef = useRef<Polygon[]>([]);
 
-  const roomsRef = useRef<RoomRuntime[]>([]);
-  const activeRoomIdRef = useRef<string | null>(null);
-
-  const isSpacePressedRef = useRef(false);
-  const isShiftPressedRef = useRef(false);
-  const isAltPressedRef = useRef(false);
-
-  const onSelectionChangeRef = useRef(onSelectionChange);
-  onSelectionChangeRef.current = onSelectionChange;
-
-  const guidesRef = useRef<GuideLine[]>([]);
-
-  const nudgeTimerRef = useRef<number | null>(null);
-  const nudgeDirtyRef = useRef(false);
-
-  const selectionRef = useRef<SelectionController | null>(null);
   const gridRef = useRef<GridController | null>(null);
-  const historyRef = useRef<HistoryController | null>(null);
-
-  const wallEditingMapRef = useRef<Map<string, WallEditingController>>(
-    new Map()
-  );
-
-  const scheduleRenderRef = useRef<null | (() => void)>(null);
-
-  const clipboardRef = useRef<CanvasSnapshotItem[] | null>(null);
-
-  const actionsRef = useRef<ReturnType<typeof createCanvasActions> | null>(
-    null
-  );
-
   const drawRoomRef = useRef<ReturnType<
     typeof createRoomDrawController
   > | null>(null);
 
-  const lastTransformWasAltRef = useRef(false);
+  const scheduleRenderRef = useRef<null | (() => void)>(null);
+  const isSpacePressedRef = useRef(false);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
     if (!canvas) return;
+
     if (scheduleRenderRef.current) scheduleRenderRef.current();
     else canvas.requestRenderAll();
   };
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
 
-  const emitSelection = () => {
-    selectionRef.current?.emitSelection();
+  const getRooms = () => {
+    return roomsRef.current;
   };
 
-  const pushHistoryNow = () => {
-    historyRef.current?.pushNow();
-  };
-
-  const scheduleNudgeCommit = () => {
-    nudgeDirtyRef.current = true;
-
-    if (nudgeTimerRef.current) window.clearTimeout(nudgeTimerRef.current);
-
-    nudgeTimerRef.current = window.setTimeout(() => {
-      if (!nudgeDirtyRef.current) return;
-      nudgeDirtyRef.current = false;
-      pushHistoryNow();
-    }, 220);
-  };
-
-  const getActiveRoomRuntime = () => {
-    const activeId = activeRoomIdRef.current;
-    if (!activeId) return null;
-    return roomsRef.current.find((r) => r.id === activeId) ?? null;
-  };
-
-  const getActiveRoom = () => {
-    return getActiveRoomRuntime()?.polygon ?? null;
-  };
-
-  const getActiveRoomHandles = () => {
-    return getActiveRoomRuntime()?.handles ?? [];
-  };
-
-  const setActiveRoomInternal = (roomId: string | null) => {
-    activeRoomIdRef.current = roomId;
-  };
-
-  const syncRoomHandlesNow = (canvas: Canvas, room: Polygon) => {
-    const roomId = (room as any)?.data?.id as string | undefined;
-    if (!roomId) return;
-
-    const runtime = roomsRef.current.find((r) => r.id === roomId);
-    if (!runtime) return;
-
-    syncHandlesToRoom(runtime.handles, room, canvas);
-    wallEditingMapRef.current.get(roomId)?.rebindNewHandles();
+  const getLastRoom = () => {
+    const rooms = roomsRef.current;
+    return rooms.length ? rooms[rooms.length - 1] : null;
   };
 
   const getRoomSizeInternal = (): RoomSize => {
-    const room = getActiveRoom();
+    const room = getLastRoom();
     if (!room) return { width: 0, height: 0 };
 
     const r = room.getBoundingRect();
-    return { width: Math.round(r.width), height: Math.round(r.height) };
+    return {
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    };
   };
 
   const setRoomSizeInternal = (size: RoomSize) => {
     const canvas = fabricCanvasRef.current;
-    const room = getActiveRoom();
+    const room = getLastRoom();
+
     if (!canvas || !room) return;
 
-    const min = 200;
-
+    const min = 100;
     const targetW = Math.max(min, Math.round(Number(size.width)));
     const targetH = Math.max(min, Math.round(Number(size.height)));
 
@@ -228,33 +219,38 @@ export default forwardRef<
     const left = cx - targetW / 2;
     const top = cy - targetH / 2;
 
-    const pts = [
+    const points: Pt[] = [
       { x: left, y: top },
       { x: left + targetW, y: top },
       { x: left + targetW, y: top + targetH },
       { x: left, y: top + targetH },
     ];
 
-    setRoomPoints(room, pts);
-    syncRoomHandlesNow(canvas, room);
+    const cleanPoints = removeClosingPoint(points);
+    const {
+      left: nextLeft,
+      top: nextTop,
+      width,
+      height,
+      localPoints,
+    } = normalizeRoomPoints(cleanPoints);
 
-    gridRef.current?.rebuild();
-    updateOpeningsForRoomChange(canvas, room as any);
-
-    canvas.getObjects().forEach((o: any) => {
-      if (!isFurniture(o)) return;
-      clampFurnitureInsideRoomPolygon(o, room as any);
-      clampFurnitureInsideRoom(o, room as any);
-      limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-      o.setCoords();
+    room.set({
+      left: nextLeft,
+      top: nextTop,
+      originX: "left",
+      originY: "top",
+      width,
+      height,
+      points: localPoints as any,
+      pathOffset: new Point(width / 2, height / 2),
     });
 
-    fitRoomToView(canvas, room);
-    clearGuides(canvas, guidesRef);
-    safeRender();
+    room.setCoords();
 
-    localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify({ points: pts }));
-    pushHistoryNow();
+    gridRef.current?.rebuild();
+    fitObjectsToView(canvas, roomsRef.current);
+    safeRender();
   };
 
   useEffect(() => {
@@ -262,7 +258,7 @@ export default forwardRef<
 
     const canvas = new Canvas(htmlCanvasRef.current, {
       backgroundColor: "#fafafa",
-      selection: true,
+      selection: false,
       preserveObjectStacking: true,
     });
 
@@ -271,259 +267,58 @@ export default forwardRef<
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
 
-    canvas.on("object:added", (opt: any) => {
-      const o = opt?.target as any;
-      if (!o) return;
-
-      o.set({
-        cornerSize: 14,
-        padding: 6,
-        transparentCorners: false,
-        cornerStyle: "circle",
-      });
-    });
-
-    const initialRoomId = "room-1";
-
-    const initialRuntime = createRoomRuntime(canvas, {
-      id: initialRoomId,
-    });
-
-    const room = initialRuntime.polygon;
-    const handles = initialRuntime.handles;
-
-    roomsRef.current = [initialRuntime];
-    activeRoomIdRef.current = initialRoomId;
-
-    const savedRoom = localStorage.getItem(STORAGE_ROOM_KEY);
-    if (savedRoom) {
-      try {
-        const parsed = JSON.parse(savedRoom);
-        if (parsed?.points && Array.isArray(parsed.points)) {
-          const pts = parsed.points
-            .filter(
-              (p: any) =>
-                p && typeof p.x === "number" && typeof p.y === "number"
-            )
-            .map((p: any) => ({ x: p.x, y: p.y }));
-
-          if (pts.length >= 3) {
-            setRoomPoints(room, pts);
-            syncRoomHandlesNow(canvas, room);
-          }
-        }
-      } catch {}
-    }
-
-    const roomRefCompat = {
-      get current() {
-        return getActiveRoom();
-      },
-      set current(_: Polygon | null) {},
-    };
-
-    const roomHandlesRefCompat = {
-      get current() {
-        return getActiveRoomHandles();
-      },
-      set current(_: Circle[]) {},
-    };
-
     const grid = createGridController({
       canvas,
-      roomRef: roomRefCompat as React.MutableRefObject<Polygon | null>,
-      roomHandlesRef: roomHandlesRefCompat as React.MutableRefObject<Circle[]>,
       scheduleRender,
-      initial: { visible: true, size: GRID_SIZE },
+      initial: {
+        visible: true,
+        size: GRID_SIZE,
+      },
     });
+
     gridRef.current = grid;
-
-    const selection = createSelectionController({
-      canvas,
-      onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
-      scheduleRender,
-      clearGuides: () => clearGuides(canvas, guidesRef),
-    });
-    selection.attach();
-    selectionRef.current = selection;
-
-    const history = createHistoryController({
-      canvas,
-      storageKey: STORAGE_KEY,
-      scheduleRender,
-      serialize: () => serializeState(canvas),
-      restore: (json) =>
-        restoreFromJson(canvas, room as any, json, () =>
-          onSelectionChangeRef.current?.(null)
-        ),
-      onAfterRestore: () => {
-        syncRoomHandlesNow(canvas, room);
-
-        gridRef.current?.restack();
-        selectionRef.current?.restyleAllItems?.();
-        clearGuides(canvas, guidesRef);
-        updateOpeningsForRoomChange(canvas, room as any);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-          o.setCoords();
-        });
-
-        scheduleRender();
-      },
-      autosaveExtra: () => {
-        try {
-          const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
-        } catch {}
-      },
-    });
-    historyRef.current = history;
-
-    actionsRef.current = createCanvasActions({
-      getCanvas: () => fabricCanvasRef.current,
-      getRoom: () => getActiveRoom(),
-
-      getGridSize: () => getGridSize(),
-      safeRender,
-
-      selection: () => selectionRef.current as any,
-      grid: () => gridRef.current as any,
-      history: () => historyRef.current as any,
-
-      onSelectionChange: (info) => onSelectionChangeRef.current?.(info),
-
-      guidesRef,
-      clipboardRef,
-
-      scheduleNudgeCommit,
-    });
-
-    const initialWallEditing = attachWallEditing({
-      canvas,
-      room,
-      handles,
-      gridSize: getGridSize(),
-      onRoomChanging: () => {
-        if (drawRoomRef.current?.isActive()) return;
-
-        grid.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-          o.setCoords();
-        });
-
-        clearGuides(canvas, guidesRef);
-        safeRender();
-      },
-      onRoomChanged: () => {
-        if (drawRoomRef.current?.isActive()) return;
-
-        syncRoomHandlesNow(canvas, room);
-
-        fitRoomToView(canvas, room);
-        grid.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          o.setCoords();
-        });
-
-        pushHistoryNow();
-
-        try {
-          const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
-        } catch {}
-      },
-    });
-
-    wallEditingMapRef.current.set(initialRoomId, initialWallEditing);
-    initialWallEditing.rebindNewHandles();
 
     drawRoomRef.current = createRoomDrawController({
       canvas,
-      room,
-      handlesRef: { current: handles } as React.MutableRefObject<Circle[]>,
       getGridSize: () => getGridSize(),
       scheduleRender,
-      onSyncHandles: () => {
-        syncRoomHandlesNow(canvas, room);
-      },
-      onRoomChanging: () => {
-        grid.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
+      onFinish: (points) => {
+        if (points.length < 3) return;
 
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-          o.setCoords();
-        });
+        const roomId = `room-${roomsRef.current.length + 1}`;
+        const room = createRoomPolygonFromPoints(points, roomId);
 
-        clearGuides(canvas, guidesRef);
+        roomsRef.current.push(room);
+        canvas.add(room);
+
+        gridRef.current?.rebuild();
+        fitObjectsToView(canvas, roomsRef.current);
         safeRender();
       },
-      onRoomChanged: () => {
-        syncRoomHandlesNow(canvas, room);
-
-        fitRoomToView(canvas, room);
-        grid.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          limitFurnitureSizeToRoomBBox(o, room, getGridSize());
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          o.setCoords();
-        });
-
-        pushHistoryNow();
-
-        try {
-          const pts = getRoomPoints(room);
-          localStorage.setItem(
-            STORAGE_ROOM_KEY,
-            JSON.stringify({ points: pts })
-          );
-        } catch {}
+      onCancel: () => {
+        safeRender();
+      },
+      onDrawingChange: () => {
+        safeRender();
       },
     });
-
-    grid.rebuild();
 
     const resizeCanvasToContainer = () => {
       const el = containerRef.current;
       if (!el) return;
 
-      const activeRoom = getActiveRoom();
+      canvas.setDimensions({
+        width: el.clientWidth,
+        height: el.clientHeight,
+      });
 
-      canvas.setDimensions({ width: el.clientWidth, height: el.clientHeight });
       canvas.calcOffset();
 
-      if (activeRoom) {
-        fitRoomToView(canvas, activeRoom);
+      if (roomsRef.current.length) {
+        fitObjectsToView(canvas, roomsRef.current);
       }
 
-      grid.rebuild();
+      gridRef.current?.rebuild();
       scheduleRender();
     };
 
@@ -533,450 +328,78 @@ export default forwardRef<
     const detachMouse = attachMouseController({
       canvas,
       isSpacePressedRef,
-      zoom: { min: ZOOM_MIN, max: ZOOM_MAX, sensitivity: ZOOM_SENSITIVITY },
+      zoom: {
+        min: ZOOM_MIN,
+        max: ZOOM_MAX,
+        sensitivity: ZOOM_SENSITIVITY,
+      },
       scheduleRender,
-      onPanEnd: () => clearGuides(canvas, guidesRef),
-    });
-
-    canvas.on("object:scaling", (opt) => {
-      const obj = opt.target as any;
-      const activeRoom = getActiveRoom();
-
-      if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
-        emitSelection();
-        return;
-      }
-
-      if (!activeRoom) {
-        emitSelection();
-        return;
-      }
-
-      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
-      lastTransformWasAltRef.current = altDown;
-
-      if (altDown) {
-        emitSelection();
-        safeRender();
-        return;
-      }
-
-      if (!isFurniture(obj)) {
-        emitSelection();
-        safeRender();
-        return;
-      }
-
-      const gridSize = getGridSize();
-
-      const corner = (opt as any)?.transform?.corner as
-        | "tl"
-        | "tr"
-        | "bl"
-        | "br"
-        | "ml"
-        | "mr"
-        | "mt"
-        | "mb"
-        | undefined;
-
-      const scaleXAllowed =
-        corner === "tl" ||
-        corner === "tr" ||
-        corner === "bl" ||
-        corner === "br" ||
-        corner === "ml" ||
-        corner === "mr";
-
-      const scaleYAllowed =
-        corner === "tl" ||
-        corner === "tr" ||
-        corner === "bl" ||
-        corner === "br" ||
-        corner === "mt" ||
-        corner === "mb";
-
-      const getAnchorOrigin = (c?: string) => {
-        switch (c) {
-          case "tl":
-            return { ox: "right", oy: "bottom" };
-          case "tr":
-            return { ox: "left", oy: "bottom" };
-          case "bl":
-            return { ox: "right", oy: "top" };
-          case "br":
-            return { ox: "left", oy: "top" };
-          case "ml":
-            return { ox: "right", oy: "center" };
-          case "mr":
-            return { ox: "left", oy: "center" };
-          case "mt":
-            return { ox: "center", oy: "bottom" };
-          case "mb":
-            return { ox: "center", oy: "top" };
-          default:
-            return { ox: "center", oy: "center" };
-        }
-      };
-
-      const { ox, oy } = getAnchorOrigin(corner);
-      const anchorPoint = obj.getPointByOrigin(ox, oy);
-
-      const currentW = obj.getScaledWidth();
-      const currentH = obj.getScaledHeight();
-
-      const baseW = Math.max(1, obj.width ?? 1);
-      const baseH = Math.max(1, obj.height ?? 1);
-
-      if (scaleXAllowed) {
-        const targetW = Math.max(
-          gridSize,
-          Math.round(currentW / gridSize) * gridSize
-        );
-        const nextScaleX = targetW / baseW;
-        if (Number.isFinite(nextScaleX)) obj.scaleX = nextScaleX;
-      }
-
-      if (scaleYAllowed) {
-        const targetH = Math.max(
-          gridSize,
-          Math.round(currentH / gridSize) * gridSize
-        );
-        const nextScaleY = targetH / baseH;
-        if (Number.isFinite(nextScaleY)) obj.scaleY = nextScaleY;
-      }
-
-      obj.setPositionByOrigin(anchorPoint, ox, oy);
-      obj.setCoords();
-
-      emitSelection();
-      safeRender();
-    });
-
-    canvas.on("object:moving", (opt) => {
-      const obj = opt.target as any;
-      const activeRoom = getActiveRoom();
-
-      if (!obj) return;
-
-      if (obj.type === "activeSelection" || Array.isArray(obj?._objects)) {
-        clearGuides(canvas, guidesRef);
-        return;
-      }
-
-      if (!activeRoom) return;
-
-      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
-      lastTransformWasAltRef.current = altDown;
-
-      if (isOpening(obj)) {
-        snapOpeningToNearestWall(obj, activeRoom as any);
-        obj.setCoords();
-        emitSelection();
-        scheduleRender();
-        return;
-      }
-
-      if (!isFurniture(obj)) return;
-
-      obj.setCoords();
-
-      if (!isAltPressedRef.current) {
-        clampFurnitureInsideRoomPolygon(obj, activeRoom as any);
-        clampFurnitureInsideRoom(obj, activeRoom as any);
-      }
-
-      const shiftDown = isShiftPressedRef.current;
-
-      if (!shiftDown && !isAltPressedRef.current) {
-        alignAndGuide(canvas, activeRoom as any, guidesRef, obj);
-        obj.setCoords();
-      } else {
-        clearGuides(canvas, guidesRef);
-      }
-
-      emitSelection();
-      scheduleRender();
-    });
-
-    canvas.on("object:rotating", (opt) => {
-      const obj = opt.target as any;
-
-      const altDown = !!(opt as any)?.e?.altKey || isAltPressedRef.current;
-      lastTransformWasAltRef.current = altDown;
-
-      if (!obj || (!isFurniture(obj) && !isOpening(obj))) {
-        emitSelection();
-        scheduleRender();
-        return;
-      }
-
-      if (isShiftPressedRef.current) {
-        const step = 15;
-        const a = obj.angle ?? 0;
-        obj.angle = Math.round(a / step) * step;
-      }
-
-      obj.setCoords();
-
-      emitSelection();
-      scheduleRender();
-    });
-
-    canvas.on("object:modified", (opt) => {
-      const obj = opt.target as any;
-      const activeRoom = getActiveRoom();
-
-      if (!obj) return;
-
-      const wasAlt = lastTransformWasAltRef.current;
-      lastTransformWasAltRef.current = false;
-
-      if (wasAlt) {
-        obj.setCoords();
-        emitSelection();
-        selectionRef.current?.restyleAllItems?.();
-        clearGuides(canvas, guidesRef);
-        pushHistoryNow();
-        scheduleRender();
-        return;
-      }
-
-      if (!activeRoom) {
-        obj.setCoords();
-        emitSelection();
-        scheduleRender();
-        return;
-      }
-
-      if (isOpening(obj)) {
-        snapOpeningToNearestWall(obj, activeRoom as any);
-        obj.setCoords();
-        emitSelection();
-        pushHistoryNow();
-        scheduleRender();
-        return;
-      }
-
-      if (!isFurniture(obj)) return;
-
-      const gridSize = getGridSize();
-
-      snapFurnitureToRoomGrid(obj, activeRoom as any, gridSize);
-
-      limitFurnitureSizeToRoomBBox(obj, activeRoom as any, gridSize);
-
-      clampFurnitureInsideRoomPolygon(obj, activeRoom as any);
-      clampFurnitureInsideRoom(obj, activeRoom as any);
-
-      obj.setCoords();
-
-      emitSelection();
-      selectionRef.current?.restyleAllItems?.();
-      clearGuides(canvas, guidesRef);
-
-      pushHistoryNow();
-      scheduleRender();
-    });
-
-    canvas.on("mouse:dblclick", (opt) => {
-      const obj = opt.target as any;
-      const activeRoom = getActiveRoom();
-
-      if (!obj || !activeRoom) return;
-
-      if (isOpening(obj) && obj.data?.type === "door") {
-        toggleDoorOpen(obj, activeRoom as any);
-
-        obj.setCoords();
-        emitSelection();
-        pushHistoryNow();
-        scheduleRender();
-      }
-    });
-
-    const actions = actionsRef.current;
-    if (!actions) {
-      return () => {
-        window.removeEventListener("resize", resizeCanvasToContainer);
-        detachMouse();
-        selection.detach();
-        grid.dispose();
-        history.dispose();
-        canvas.dispose();
-      };
-    }
-
-    const detachKeyboard = attachKeyboardController({
-      canvas,
-      isSpacePressedRef,
-      isShiftPressedRef,
-      isAltPressedRef,
-      getGridSize: () => getGridSize(),
-      actions: {
-        moveLayer: actions.moveLayer,
-        nudgeSelected: actions.nudgeSelected,
-        copySelected: actions.copySelected,
-        paste: actions.paste,
-        undo: actions.undo,
-        redo: actions.redo,
-        deleteSelected: actions.deleteSelected,
+      onViewportChange: () => {
+        gridRef.current?.rebuild();
       },
     });
 
-    history.initFromStorage();
+    grid.rebuild();
     scheduleRender();
 
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
 
       detachMouse();
-      detachKeyboard();
 
       drawRoomRef.current?.stop();
       drawRoomRef.current = null;
 
-      selection.detach();
-      selectionRef.current = null;
-
       grid.dispose();
       gridRef.current = null;
 
-      history.dispose();
-      historyRef.current = null;
-
-      wallEditingMapRef.current.clear();
-
-      if (nudgeTimerRef.current) {
-        window.clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = null;
-      }
-
-      clearGuides(canvas, guidesRef);
-
-      for (const runtime of roomsRef.current) {
-        for (const h of runtime.handles) {
-          canvas.remove(h);
-        }
-      }
-
-      roomsRef.current = [];
-
       canvas.dispose();
 
+      roomsRef.current = [];
       fabricCanvasRef.current = null;
       scheduleRenderRef.current = null;
-      actionsRef.current = null;
-      activeRoomIdRef.current = null;
     };
   }, []);
 
   useImperativeHandle(
     ref,
     () => ({
-      addFurniture(type: FurnitureType) {
-        actionsRef.current?.addFurniture(type);
-      },
+      addFurniture(_: FurnitureType) {},
 
-      deleteSelected() {
-        actionsRef.current?.deleteSelected();
-      },
+      deleteSelected() {},
 
-      duplicateSelected() {
-        actionsRef.current?.duplicateSelected();
-      },
+      duplicateSelected() {},
 
-      setSelectedProps(patch) {
-        actionsRef.current?.setSelectedProps(patch);
-      },
+      setSelectedProps() {},
 
-      toggleSelectedDoor() {
-        actionsRef.current?.toggleSelectedDoor();
-      },
+      toggleSelectedDoor() {},
 
       fitRoom() {
-        actionsRef.current?.fitRoom();
-      },
-
-      undo() {
-        actionsRef.current?.undo();
-      },
-
-      redo() {
-        actionsRef.current?.redo();
-      },
-
-      save() {
         const canvas = fabricCanvasRef.current;
-        const room = getActiveRoom();
-        if (!canvas || !room) return;
-        saveNow(canvas, room);
-      },
+        if (!canvas || !roomsRef.current.length) return;
 
-      load() {
-        const canvas = fabricCanvasRef.current;
-        const room = getActiveRoom();
-        if (!canvas || !room) return;
-
-        const { layoutJson } = loadNow(canvas, room, () =>
-          onSelectionChangeRef.current?.(null)
-        );
-
-        syncRoomHandlesNow(canvas, room);
-
-        gridRef.current?.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllItems?.();
-
-        const snap = layoutJson ?? serializeState(canvas);
-        historyRef.current?.setHistoryFromSnapshot(snap);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          limitFurnitureSizeToRoomBBox(o, room as any, getGridSize());
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          o.setCoords();
-        });
-
+        fitObjectsToView(canvas, roomsRef.current);
         safeRender();
       },
 
-      exportJson() {
-        const canvas = fabricCanvasRef.current;
-        const room = getActiveRoom();
-        if (!canvas || !room) return;
-        exportJsonFile(canvas, room);
+      undo() {},
+
+      redo() {},
+
+      save() {},
+
+      load() {},
+
+      exportJson() {},
+
+      importJsonString() {},
+
+      getRoomSize() {
+        return getRoomSizeInternal();
       },
 
-      importJsonString(json: string) {
-        const canvas = fabricCanvasRef.current;
-        const room = getActiveRoom();
-        if (!canvas || !room) return;
-
-        importJson(canvas, room, json, () =>
-          onSelectionChangeRef.current?.(null)
-        );
-
-        syncRoomHandlesNow(canvas, room);
-
-        gridRef.current?.rebuild();
-        updateOpeningsForRoomChange(canvas, room as any);
-        selectionRef.current?.restyleAllItems?.();
-
-        const snap = serializeState(canvas);
-        historyRef.current?.setHistoryFromSnapshot(snap);
-
-        canvas.getObjects().forEach((o: any) => {
-          if (!isFurniture(o)) return;
-          limitFurnitureSizeToRoomBBox(o, room as any, getGridSize());
-          clampFurnitureInsideRoomPolygon(o, room as any);
-          clampFurnitureInsideRoom(o, room as any);
-          o.setCoords();
-        });
-
-        pushHistoryNow();
-        safeRender();
+      setRoomSize(size: RoomSize) {
+        setRoomSizeInternal(size);
       },
 
       setGridVisible(visible: boolean) {
@@ -987,21 +410,9 @@ export default forwardRef<
         gridRef.current?.setSize(size);
       },
 
-      getRoomSize() {
-        return getRoomSizeInternal();
-      },
+      addDoor() {},
 
-      setRoomSize(size: RoomSize) {
-        setRoomSizeInternal(size);
-      },
-
-      addDoor() {
-        actionsRef.current?.addDoor();
-      },
-
-      addWindow() {
-        actionsRef.current?.addWindow();
-      },
+      addWindow() {},
 
       isDrawingRoom() {
         return !!drawRoomRef.current?.isActive();
@@ -1015,89 +426,14 @@ export default forwardRef<
         drawRoomRef.current?.stop();
       },
 
-      addRoom() {
-        const canvas = fabricCanvasRef.current;
-        if (!canvas) return;
-
-        const nextId = `room-${roomsRef.current.length + 1}`;
-        const offset = roomsRef.current.length * 40;
-
-        const runtime = createRoomRuntime(canvas, {
-          id: nextId,
-          points: [
-            { x: 200 + offset, y: 150 + offset },
-            { x: 800 + offset, y: 150 + offset },
-            { x: 800 + offset, y: 550 + offset },
-            { x: 200 + offset, y: 550 + offset },
-          ],
-        });
-
-        roomsRef.current.push(runtime);
-        activeRoomIdRef.current = nextId;
-
-        const wallEditing = attachWallEditing({
-          canvas,
-          room: runtime.polygon,
-          handles: runtime.handles,
-          gridSize: getGridSize(),
-          onRoomChanging: () => {
-            if (drawRoomRef.current?.isActive()) return;
-
-            gridRef.current?.rebuild();
-            updateOpeningsForRoomChange(canvas, runtime.polygon as any);
-
-            canvas.getObjects().forEach((o: any) => {
-              if (!isFurniture(o)) return;
-              clampFurnitureInsideRoomPolygon(o, runtime.polygon as any);
-              clampFurnitureInsideRoom(o, runtime.polygon as any);
-              limitFurnitureSizeToRoomBBox(o, runtime.polygon, getGridSize());
-              o.setCoords();
-            });
-
-            clearGuides(canvas, guidesRef);
-            safeRender();
-          },
-          onRoomChanged: () => {
-            if (drawRoomRef.current?.isActive()) return;
-
-            syncRoomHandlesNow(canvas, runtime.polygon);
-
-            fitRoomToView(canvas, runtime.polygon);
-            gridRef.current?.rebuild();
-            updateOpeningsForRoomChange(canvas, runtime.polygon as any);
-
-            canvas.getObjects().forEach((o: any) => {
-              if (!isFurniture(o)) return;
-              limitFurnitureSizeToRoomBBox(o, runtime.polygon, getGridSize());
-              clampFurnitureInsideRoomPolygon(o, runtime.polygon as any);
-              clampFurnitureInsideRoom(o, runtime.polygon as any);
-              o.setCoords();
-            });
-
-            pushHistoryNow();
-          },
-        });
-
-        wallEditingMapRef.current.set(nextId, wallEditing);
-        wallEditing.rebindNewHandles();
-
-        fitRoomToView(canvas, runtime.polygon);
-        safeRender();
-      },
+      addRoom() {},
 
       getActiveRoomId() {
-        return activeRoomIdRef.current;
+        const room = getLastRoom();
+        return room ? (room as any).data?.id ?? null : null;
       },
 
-      setActiveRoom(roomId: string) {
-        const runtime = roomsRef.current.find((r) => r.id === roomId);
-        const canvas = fabricCanvasRef.current;
-        if (!runtime || !canvas) return;
-
-        setActiveRoomInternal(roomId);
-        fitRoomToView(canvas, runtime.polygon);
-        safeRender();
-      },
+      setActiveRoom() {},
     }),
     []
   );
@@ -1105,7 +441,7 @@ export default forwardRef<
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full min-h-0 min-w-0 bg-white border border-neutral-300 overflow-hidden"
+      className="relative h-full min-h-0 w-full min-w-0 overflow-hidden border border-neutral-300 bg-white"
     >
       <canvas ref={htmlCanvasRef} />
     </div>

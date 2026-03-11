@@ -1,21 +1,75 @@
-import type { Canvas, Rect, Polygon } from "fabric";
+import type { Canvas } from "fabric";
 import { Rect as FabricRect } from "fabric";
 
 import type {
   CanvasSnapshotItem,
   FurnitureSnapshot,
   OpeningSnapshot,
+  Pt,
 } from "../core/planner-types";
 
 import { GRID_SIZE } from "../core/planner-constants";
 import {
   clampFurnitureInsideRoom,
+  clampFurnitureInsideRoomPolygon,
   snapFurnitureToRoomGrid,
 } from "../furniture/furniture";
 import { isFurniture, makeId } from "../core/utils";
 import { isOpening, snapOpeningToNearestWall } from "../openings/openings";
 
-export function serializeState(canvas: Canvas) {
+export type RoomSnapshot = {
+  id: string;
+  points: Pt[];
+};
+
+export type PlanSnapshotV2 = {
+  version: 2;
+  rooms: RoomSnapshot[];
+  items: CanvasSnapshotItem[];
+};
+
+type RestoreArgs = {
+  canvas: Canvas;
+  json: string;
+  clearCanvasState: () => void;
+  createRoom: (room: RoomSnapshot) => any;
+  getRoomById: (roomId: string) => any | null;
+  onClearSelection: () => void;
+};
+
+function isRoom(obj: any) {
+  return obj?.data?.kind === "room";
+}
+
+function getRoomPoints(room: any): Pt[] {
+  const pts = Array.isArray(room?.points) ? room.points : [];
+  const left = Number(room?.left) || 0;
+  const top = Number(room?.top) || 0;
+
+  return pts.map((p: any) => ({
+    x: left + (Number(p?.x) || 0),
+    y: top + (Number(p?.y) || 0),
+  }));
+}
+
+function serializeRooms(canvas: Canvas): RoomSnapshot[] {
+  const rooms = canvas
+    .getObjects()
+    .filter((o: any) => isRoom(o))
+    .map(
+      (room: any): RoomSnapshot => {
+        return {
+          id: String(room?.data?.id ?? makeId()),
+          points: getRoomPoints(room),
+        };
+      }
+    );
+
+  rooms.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return rooms;
+}
+
+function serializeItems(canvas: Canvas): CanvasSnapshotItem[] {
   const items = canvas
     .getObjects()
     .filter(
@@ -41,9 +95,10 @@ export function serializeState(canvas: Canvas) {
               kind: "furniture",
               type: o.data?.type ?? "unknown",
               id: o.data?.id ?? makeId(),
+              roomId: o.data?.roomId,
               baseStroke: o.data?.baseStroke ?? o.stroke ?? "#10b981",
               baseStrokeWidth: o.data?.baseStrokeWidth ?? o.strokeWidth ?? 2,
-            },
+            } as any,
           };
 
           return snap;
@@ -64,6 +119,7 @@ export function serializeState(canvas: Canvas) {
             kind: "opening",
             type: o.data?.type ?? "door",
             id: o.data?.id ?? makeId(),
+            roomId: o.data?.roomId,
             wallId:
               typeof o.data?.wallId === "string" ? o.data.wallId : "seg-0",
             t: typeof o.data?.t === "number" ? o.data.t : 0.5,
@@ -83,37 +139,81 @@ export function serializeState(canvas: Canvas) {
     return String(ida).localeCompare(String(idb));
   });
 
-  return JSON.stringify(items);
+  return items;
 }
 
-function safeParseItems(json: string): CanvasSnapshotItem[] {
+export function serializeState(canvas: Canvas) {
+  const snapshot: PlanSnapshotV2 = {
+    version: 2,
+    rooms: serializeRooms(canvas),
+    items: serializeItems(canvas),
+  };
+
+  return JSON.stringify(snapshot);
+}
+
+function safeParsePlan(json: string): PlanSnapshotV2 {
   try {
     const data = JSON.parse(json) as any;
-    if (!Array.isArray(data)) return [];
-    return data as CanvasSnapshotItem[];
+
+    if (Array.isArray(data)) {
+      return {
+        version: 2,
+        rooms: [],
+        items: data as CanvasSnapshotItem[],
+      };
+    }
+
+    return {
+      version: 2,
+      rooms: Array.isArray(data?.rooms) ? data.rooms : [],
+      items: Array.isArray(data?.items) ? data.items : [],
+    };
   } catch {
-    return [];
+    return {
+      version: 2,
+      rooms: [],
+      items: [],
+    };
   }
 }
 
-export function restoreFromJson(
-  canvas: Canvas,
-  room: Rect | Polygon,
-  json: string,
-  onClearSelection: () => void
-) {
+export function restoreFromJson(args: RestoreArgs) {
+  const {
+    canvas,
+    json,
+    clearCanvasState,
+    createRoom,
+    getRoomById,
+    onClearSelection,
+  } = args;
+
   const prevRenderOnAddRemove = (canvas as any).renderOnAddRemove;
   (canvas as any).renderOnAddRemove = false;
 
   try {
-    const objects = canvas.getObjects().slice();
-    for (const o of objects as any[]) {
-      if (isFurniture(o) || isOpening(o)) canvas.remove(o);
+    clearCanvasState();
+
+    const plan = safeParsePlan(json);
+
+    for (const room of plan.rooms) {
+      if (!room?.id || !Array.isArray(room?.points) || room.points.length < 3) {
+        continue;
+      }
+
+      createRoom({
+        id: room.id,
+        points: room.points,
+      });
     }
 
-    const data = safeParseItems(json);
+    for (const s of plan.items) {
+      const roomId = (s as any)?.data?.roomId as string | undefined;
+      const ownerRoom =
+        (roomId && getRoomById(roomId)) ||
+        getRoomById(plan.rooms[0]?.id ?? "") ||
+        null;
 
-    for (const s of data) {
       if ((s as any)?.data?.kind === "furniture") {
         const f = s as FurnitureSnapshot;
 
@@ -146,14 +246,18 @@ export function restoreFromJson(
           ...f.data,
           kind: "furniture",
           id: f.data?.id ?? makeId(),
+          roomId,
         };
 
         canvas.add(rect);
 
-        clampFurnitureInsideRoom(rect as any, room as any);
-        snapFurnitureToRoomGrid(rect as any, room as any, GRID_SIZE);
-        rect.setCoords();
+        if (ownerRoom) {
+          clampFurnitureInsideRoomPolygon(rect as any, ownerRoom as any);
+          clampFurnitureInsideRoom(rect as any, ownerRoom as any);
+          snapFurnitureToRoomGrid(rect as any, ownerRoom as any, GRID_SIZE);
+        }
 
+        rect.setCoords();
         continue;
       }
 
@@ -210,27 +314,25 @@ export function restoreFromJson(
           kind: "opening",
           type,
           id: (o as any)?.data?.id ?? makeId(),
-
+          roomId,
           wallId:
             wallId ??
             (typeof legacySegIndex === "number"
               ? `seg-${legacySegIndex}`
               : "seg-0"),
-
           t: typeof (o as any)?.data?.t === "number" ? (o as any).data.t : 0.5,
           offset:
             typeof (o as any)?.data?.offset === "number"
               ? (o as any).data.offset
               : 0,
-
           hinge,
           isOpen: !!(o as any)?.data?.isOpen,
         };
 
         canvas.add(rect);
 
-        if ((room as any)?.points) {
-          snapOpeningToNearestWall(rect as any, room as any);
+        if (ownerRoom) {
+          snapOpeningToNearestWall(rect as any, ownerRoom as any);
         }
 
         rect.setCoords();

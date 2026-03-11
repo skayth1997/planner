@@ -11,9 +11,14 @@ import {
 type Args = {
   canvas: Canvas;
   onSelectionChange?: (info: SelectedInfo | null) => void;
+  onRoomActivated?: (roomId: string, roomObj: any) => void;
   scheduleRender: () => void;
   clearGuides?: () => void;
 };
+
+function isRoom(obj: any) {
+  return obj?.data?.kind === "room";
+}
 
 function isSelectableItem(obj: any) {
   return isFurniture(obj) || isOpening(obj);
@@ -26,6 +31,7 @@ function getSelectedObjectsFromCanvas(canvas: Canvas): any[] {
   const objs: any[] = Array.isArray(active?._objects)
     ? active._objects
     : [active];
+
   return objs.filter((o) => isSelectableItem(o));
 }
 
@@ -60,8 +66,31 @@ function isActiveSelectionContains(active: any, obj: any) {
   return Array.isArray(active?._objects) && active._objects.includes(obj);
 }
 
+function getRoomSelectedInfo(room: any): SelectedInfo | null {
+  if (!isRoom(room)) return null;
+
+  const rect = room.getBoundingRect();
+
+  return {
+    id: String(room?.data?.id ?? "room"),
+    kind: "room",
+    type: "room",
+    left: rect.left ?? 0,
+    top: rect.top ?? 0,
+    width: rect.width ?? 0,
+    height: rect.height ?? 0,
+    angle: Number(room?.angle ?? 0),
+  };
+}
+
 export function createSelectionController(args: Args) {
-  const { canvas, onSelectionChange, scheduleRender, clearGuides } = args;
+  const {
+    canvas,
+    onSelectionChange,
+    onRoomActivated,
+    scheduleRender,
+    clearGuides,
+  } = args;
 
   const emitSelection = () => {
     const selected = getSelectedObjectsFromCanvas(canvas);
@@ -69,6 +98,7 @@ export function createSelectionController(args: Args) {
       onSelectionChange?.(null);
       return;
     }
+
     onSelectionChange?.(getSelectedInfo(selected[0]));
   };
 
@@ -115,11 +145,29 @@ export function createSelectionController(args: Args) {
 
   const onMouseOver = (opt: any) => {
     const t = opt.target as any;
-    if (!t || !isSelectableItem(t)) return;
+    if (!t) return;
+
+    if (isRoom(t)) {
+      t.set({
+        shadow: {
+          color: "rgba(37,99,235,0.18)",
+          blur: 10,
+          offsetX: 0,
+          offsetY: 0,
+        },
+        objectCaching: false,
+      });
+      t.setCoords();
+      scheduleRender();
+      return;
+    }
+
+    if (!isSelectableItem(t)) return;
 
     const active = canvas.getActiveObject() as any;
-    if (active && (active === t || isActiveSelectionContains(active, t)))
+    if (active && (active === t || isActiveSelectionContains(active, t))) {
       return;
+    }
 
     setHoverEffect(t, true);
     t.set({ stroke: HOVER_STROKE, strokeWidth: HOVER_STROKE_WIDTH });
@@ -129,17 +177,48 @@ export function createSelectionController(args: Args) {
 
   const onMouseOut = (opt: any) => {
     const t = opt.target as any;
-    if (!t || !isSelectableItem(t)) return;
+    if (!t) return;
+
+    if (isRoom(t)) {
+      t.set({
+        shadow: null,
+        objectCaching: false,
+      });
+      t.setCoords();
+      scheduleRender();
+      return;
+    }
+
+    if (!isSelectableItem(t)) return;
 
     const active = canvas.getActiveObject() as any;
-    if (active && (active === t || isActiveSelectionContains(active, t)))
+    if (active && (active === t || isActiveSelectionContains(active, t))) {
       return;
+    }
 
     setHoverEffect(t, false);
 
     const base = getBaseStyle(t);
     t.set({ stroke: base.stroke, strokeWidth: base.strokeWidth });
     t.setCoords();
+    scheduleRender();
+  };
+
+  const onMouseDown = (opt: any) => {
+    const t = opt.target as any;
+    if (!t) return;
+
+    if (!isRoom(t)) return;
+
+    const roomId = String(t?.data?.id ?? "");
+    if (!roomId) return;
+
+    canvas.discardActiveObject();
+    clearGuides?.();
+
+    onRoomActivated?.(roomId, t);
+    onSelectionChange?.(getRoomSelectedInfo(t));
+
     scheduleRender();
   };
 
@@ -150,6 +229,7 @@ export function createSelectionController(args: Args) {
 
     canvas.on("mouse:over", onMouseOver);
     canvas.on("mouse:out", onMouseOut);
+    canvas.on("mouse:down", onMouseDown);
   };
 
   const detach = () => {
@@ -159,6 +239,7 @@ export function createSelectionController(args: Args) {
 
     canvas.off("mouse:over", onMouseOver);
     canvas.off("mouse:out", onMouseOut);
+    canvas.off("mouse:down", onMouseDown);
   };
 
   return {

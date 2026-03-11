@@ -1,19 +1,8 @@
-import {
-  Line as FabricLine,
-  Polygon as FabricPolygon,
-  Point,
-  util,
-} from "fabric";
-import type { Canvas, Line, Polygon, Circle } from "fabric";
-import { getRoomPoints } from "@/components/canvas/planner-canvas/room/room-walls";
-
-type RoomRef = { current: Polygon | null };
-type HandlesRef = { current: Circle[] };
+import { Line as FabricLine } from "fabric";
+import type { Canvas, Line } from "fabric";
 
 type Args = {
   canvas: Canvas;
-  roomRef: RoomRef;
-  roomHandlesRef: HandlesRef;
   scheduleRender: () => void;
   initial: {
     visible: boolean;
@@ -21,141 +10,151 @@ type Args = {
   };
 };
 
-function getRoomAbsolutePoints(room: Polygon) {
-  const pts = (room.points ?? []) as Array<{ x: number; y: number }>;
-  const pathOffset = room.pathOffset ?? new Point(0, 0);
-  const matrix = room.calcTransformMatrix();
-
-  return pts.map((p) => {
-    const local = new Point(
-      (Number(p.x) || 0) - pathOffset.x,
-      (Number(p.y) || 0) - pathOffset.y
-    );
-
-    const absolute = util.transformPoint(local, matrix);
-
-    return {
-      x: absolute.x,
-      y: absolute.y,
-    };
-  });
+function toSceneX(canvas: Canvas, viewportX: number) {
+  const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+  return (viewportX - vpt[4]) / vpt[0];
 }
 
-function createRoomClipPath(room: Polygon) {
-  return new FabricPolygon(getRoomPoints(room) as any, {
-    absolutePositioned: true,
+function toSceneY(canvas: Canvas, viewportY: number) {
+  const vpt = canvas.viewportTransform ?? [1, 0, 0, 1, 0, 0];
+  return (viewportY - vpt[5]) / vpt[3];
+}
+
+function getVisibleSceneBounds(canvas: Canvas) {
+  const width = canvas.getWidth();
+  const height = canvas.getHeight();
+
+  const left = toSceneX(canvas, 0);
+  const top = toSceneY(canvas, 0);
+  const right = toSceneX(canvas, width);
+  const bottom = toSceneY(canvas, height);
+
+  return {
+    left: Math.min(left, right),
+    top: Math.min(top, bottom),
+    right: Math.max(left, right),
+    bottom: Math.max(top, bottom),
+  };
+}
+
+function makeLine(
+  coords: [number, number, number, number],
+  options: {
+    stroke: string;
+    strokeWidth: number;
+    kind: "grid-line-minor" | "grid-line-major";
+  }
+) {
+  const line = (new FabricLine(coords, {
+    stroke: options.stroke,
+    strokeWidth: options.strokeWidth,
     selectable: false,
     evented: false,
+    excludeFromExport: true,
     objectCaching: false,
-  });
+  }) as unknown) as Line;
+
+  (line as any).data = { kind: options.kind };
+
+  return line;
 }
 
-function drawGridLines(canvas: Canvas, room: Polygon, gridSize: number) {
+function drawGridLines(canvas: Canvas, gridSize: number) {
   const lines: Line[] = [];
 
-  const roomRect = room.getBoundingRect();
-  const stroke = (room as any).strokeWidth ?? 0;
-  const inset = stroke / 2;
+  const bounds = getVisibleSceneBounds(canvas);
 
-  const left = roomRect.left + inset;
-  const top = roomRect.top + inset;
-  const right = roomRect.left + roomRect.width - inset;
-  const bottom = roomRect.top + roomRect.height - inset;
+  const startX = Math.floor(bounds.left / gridSize) * gridSize;
+  const endX = Math.ceil(bounds.right / gridSize) * gridSize;
 
-  for (let x = left; x <= right; x += gridSize) {
-    const l = (new FabricLine([x, top, x, bottom], {
-      stroke: "#d1d5db",
+  const startY = Math.floor(bounds.top / gridSize) * gridSize;
+  const endY = Math.ceil(bounds.bottom / gridSize) * gridSize;
+
+  const majorStep = gridSize * 5;
+
+  for (let x = startX; x <= endX; x += gridSize) {
+    const isMajor = Math.round(x) % majorStep === 0;
+
+    const line = new FabricLine([x, startY, x, endY], {
+      stroke: isMajor ? "#cfd4dc" : "#e5e7eb",
+      strokeWidth: isMajor ? 1.2 : 1,
       selectable: false,
       evented: false,
       excludeFromExport: true,
       objectCaching: false,
-    }) as unknown) as Line;
+    }) as unknown as Line;
 
-    (l as any).clipPath = createRoomClipPath(room);
-    (l as any).data = { kind: "grid-line" };
+    (line as any).data = {
+      kind: isMajor ? "grid-line-major" : "grid-line",
+    };
 
-    canvas.add(l as any);
-    lines.push(l);
+    canvas.add(line as any);
+    lines.push(line);
   }
 
-  for (let y = top; y <= bottom; y += gridSize) {
-    const l = (new FabricLine([left, y, right, y], {
-      stroke: "#d1d5db",
+  for (let y = startY; y <= endY; y += gridSize) {
+    const isMajor = Math.round(y) % majorStep === 0;
+
+    const line = new FabricLine([startX, y, endX, y], {
+      stroke: isMajor ? "#cfd4dc" : "#e5e7eb",
+      strokeWidth: isMajor ? 1.2 : 1,
       selectable: false,
       evented: false,
       excludeFromExport: true,
       objectCaching: false,
-    }) as unknown) as Line;
+    }) as unknown as Line;
 
-    (l as any).clipPath = createRoomClipPath(room);
-    (l as any).data = { kind: "grid-line" };
+    (line as any).data = {
+      kind: isMajor ? "grid-line-major" : "grid-line",
+    };
 
-    canvas.add(l as any);
-    lines.push(l);
+    canvas.add(line as any);
+    lines.push(line);
   }
 
   return lines;
 }
 
 export function createGridController(args: Args) {
-  const { canvas, roomRef, roomHandlesRef, scheduleRender, initial } = args;
+  const { canvas, scheduleRender, initial } = args;
 
   let visible = initial.visible;
   let size = initial.size;
   let lines: Line[] = [];
 
-  const restack = () => {
-    const room = roomRef.current;
-    if (!room) return;
-
-    for (const l of lines) {
-      canvas.sendObjectToBack(l as any);
-    }
-
-    canvas.bringObjectToFront(room as any);
-
-    canvas.getObjects().forEach((o: any) => {
-      if (o?.data?.kind === "opening") canvas.bringObjectToFront(o);
-    });
-
-    canvas.getObjects().forEach((o: any) => {
-      if (o?.data?.kind === "furniture") canvas.bringObjectToFront(o);
-    });
-
-    for (const h of roomHandlesRef.current) {
-      canvas.bringObjectToFront(h as any);
-    }
-  };
-
   const clearLines = () => {
-    for (const l of lines) {
-      canvas.remove(l as any);
+    for (const line of lines) {
+      canvas.remove(line as any);
     }
     lines = [];
   };
 
-  const rebuild = () => {
-    const room = roomRef.current;
-    if (!room) return;
+  const restack = () => {
+    for (const line of lines) {
+      canvas.sendObjectToBack(line as any);
+    }
+  };
 
+  const rebuild = () => {
     clearLines();
 
     if (visible) {
-      lines = drawGridLines(canvas, room, size);
+      lines = drawGridLines(canvas, size);
+      restack();
     }
 
-    restack();
     scheduleRender();
   };
 
-  const setVisible = (v: boolean) => {
-    visible = !!v;
+  const setVisible = (next: boolean) => {
+    visible = !!next;
     rebuild();
   };
 
   const setSize = (next: number) => {
     const n = Number(next);
     if (!Number.isFinite(n) || n <= 5) return;
+
     size = n;
     rebuild();
   };

@@ -1,13 +1,23 @@
-import type { Canvas, Polygon } from "fabric";
-import { STORAGE_KEY, STORAGE_ROOM_KEY } from "../core/planner-constants";
+import type { Canvas } from "fabric";
+import { STORAGE_KEY } from "../core/planner-constants";
 import { serializeState, restoreFromJson } from "../history/history";
+import type { Pt } from "../core/planner-types";
 
-type RoomPoint = { x: number; y: number };
-type RoomState = { points: RoomPoint[] };
+type RoomSnapshot = {
+  id: string;
+  points: Pt[];
+};
 
 type PlanSnapshot = {
-  room: RoomState;
+  version: 2;
+  rooms: RoomSnapshot[];
   items: any[];
+};
+
+type RestoreHelpers = {
+  clearCanvasState: () => void;
+  createRoom: (room: RoomSnapshot) => any;
+  getRoomById: (roomId: string) => any | null;
 };
 
 function safeParseJson<T = any>(text: string): T | null {
@@ -18,17 +28,7 @@ function safeParseJson<T = any>(text: string): T | null {
   }
 }
 
-function getRoomPoints(room: Polygon): RoomPoint[] {
-  const pts = (room.points ?? []) as any[];
-  return pts.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }));
-}
-
-function setRoomPoints(room: Polygon, points: RoomPoint[]) {
-  room.set({ points: points as any });
-  room.setCoords();
-}
-
-function isValidRoomPoints(points: any): points is RoomPoint[] {
+function isValidRoomPoints(points: any): points is Pt[] {
   return (
     Array.isArray(points) &&
     points.length >= 3 &&
@@ -36,48 +36,93 @@ function isValidRoomPoints(points: any): points is RoomPoint[] {
   );
 }
 
-export function saveNow(canvas: Canvas, room: Polygon) {
-  const itemsJson = serializeState(canvas);
-  localStorage.setItem(STORAGE_KEY, itemsJson);
+function isPlanSnapshot(value: any): value is PlanSnapshot {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    Array.isArray(value.rooms) &&
+    Array.isArray(value.items)
+  );
+}
 
-  const roomState: RoomState = { points: getRoomPoints(room) };
-  localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(roomState));
+function normalizeImportedJson(json: string): string {
+  const parsed = safeParseJson<any>(json);
+
+  if (Array.isArray(parsed)) {
+    return JSON.stringify({
+      version: 2,
+      rooms: [],
+      items: parsed,
+    } satisfies PlanSnapshot);
+  }
+
+  if (isPlanSnapshot(parsed)) {
+    const rooms = parsed.rooms.filter(
+      (room: any) =>
+        room && typeof room.id === "string" && isValidRoomPoints(room.points)
+    );
+
+    return JSON.stringify({
+      version: 2,
+      rooms,
+      items: parsed.items,
+    } satisfies PlanSnapshot);
+  }
+
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).items)) {
+    const maybePoints = (parsed as any)?.room?.points;
+    const legacyRooms = isValidRoomPoints(maybePoints)
+      ? [{ id: "room-1", points: maybePoints }]
+      : [];
+
+    return JSON.stringify({
+      version: 2,
+      rooms: legacyRooms,
+      items: (parsed as any).items,
+    } satisfies PlanSnapshot);
+  }
+
+  return json;
+}
+
+export function saveNow(canvas: Canvas) {
+  const planJson = serializeState(canvas);
+  localStorage.setItem(STORAGE_KEY, planJson);
 }
 
 export function loadNow(
   canvas: Canvas,
-  room: Polygon,
-  onClearSelection: () => void
-): { layoutJson: string | null; roomState: RoomState | null } {
-  const itemsJson = localStorage.getItem(STORAGE_KEY);
-  const roomJson = localStorage.getItem(STORAGE_ROOM_KEY);
+  onClearSelection: () => void,
+  helpers: RestoreHelpers
+): { layoutJson: string | null } {
+  const planJson = localStorage.getItem(STORAGE_KEY);
+  if (!planJson) return { layoutJson: null };
 
-  let roomState: RoomState | null = null;
+  restoreFromJson({
+    canvas,
+    json: planJson,
+    clearCanvasState: helpers.clearCanvasState,
+    createRoom: helpers.createRoom,
+    getRoomById: helpers.getRoomById,
+    onClearSelection,
+  });
 
-  if (roomJson) {
-    const parsed = safeParseJson<any>(roomJson);
-    if (parsed && isValidRoomPoints(parsed.points)) {
-      roomState = { points: parsed.points };
-      setRoomPoints(room, roomState.points);
-    }
-  }
-
-  if (!itemsJson) return { layoutJson: null, roomState };
-
-  restoreFromJson(canvas as any, room as any, itemsJson, onClearSelection);
-  return { layoutJson: itemsJson, roomState };
+  return { layoutJson: planJson };
 }
 
-export function exportJson(canvas: Canvas, room: Polygon) {
-  const itemsJson = serializeState(canvas);
-  const roomState: RoomState = { points: getRoomPoints(room) };
+export function exportJson(canvas: Canvas) {
+  const planJson = serializeState(canvas);
+  const parsed = safeParseJson<any>(planJson);
 
-  const payload: PlanSnapshot = {
-    room: roomState,
-    items: safeParseJson(itemsJson) ?? [],
-  };
+  const payload: PlanSnapshot = isPlanSnapshot(parsed)
+    ? parsed
+    : {
+        version: 2,
+        rooms: [],
+        items: Array.isArray(parsed) ? parsed : [],
+      };
 
-  const blob = new Blob([JSON.stringify(payload)], {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
   const url = URL.createObjectURL(blob);
@@ -94,38 +139,20 @@ export function exportJson(canvas: Canvas, room: Polygon) {
 
 export function importJsonString(
   canvas: Canvas,
-  room: Polygon,
   json: string,
-  onClearSelection: () => void
+  onClearSelection: () => void,
+  helpers: RestoreHelpers
 ) {
-  const parsed = safeParseJson<any>(json);
+  const normalizedJson = normalizeImportedJson(json);
 
-  if (Array.isArray(parsed)) {
-    const itemsOnly = JSON.stringify(parsed);
-    restoreFromJson(canvas as any, room as any, itemsOnly, onClearSelection);
-    localStorage.setItem(STORAGE_KEY, itemsOnly);
-    return;
-  }
+  restoreFromJson({
+    canvas,
+    json: normalizedJson,
+    clearCanvasState: helpers.clearCanvasState,
+    createRoom: helpers.createRoom,
+    getRoomById: helpers.getRoomById,
+    onClearSelection,
+  });
 
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    Array.isArray((parsed as any).items)
-  ) {
-    const maybePoints = (parsed as any)?.room?.points;
-
-    if (isValidRoomPoints(maybePoints)) {
-      const roomState: RoomState = { points: maybePoints };
-      setRoomPoints(room, roomState.points);
-      localStorage.setItem(STORAGE_ROOM_KEY, JSON.stringify(roomState));
-    }
-
-    const itemsOnly = JSON.stringify((parsed as any).items);
-    restoreFromJson(canvas as any, room as any, itemsOnly, onClearSelection);
-    localStorage.setItem(STORAGE_KEY, itemsOnly);
-    return;
-  }
-
-  restoreFromJson(canvas as any, room as any, json, onClearSelection);
-  localStorage.setItem(STORAGE_KEY, json);
+  localStorage.setItem(STORAGE_KEY, normalizedJson);
 }

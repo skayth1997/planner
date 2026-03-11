@@ -1,34 +1,33 @@
-import type { Canvas, Polygon, Circle, Line } from "fabric";
+import type { Canvas, Line } from "fabric";
 import { Circle as FabricCircle, Line as FabricLine, util } from "fabric";
 import type { Pt } from "../core/planner-types";
-import { setRoomPoints } from "./room-walls";
+
+const CLOSE_DISTANCE = 16;
 
 export function createRoomDrawController(args: {
   canvas: Canvas;
-  room: Polygon;
-  handlesRef: React.MutableRefObject<Circle[]>;
   getGridSize: () => number;
-  onRoomChanging?: () => void;
-  onRoomChanged?: () => void;
-  onSyncHandles?: () => void;
+  onFinish?: (points: Pt[]) => void;
+  onCancel?: () => void;
+  onDrawingChange?: (points: Pt[]) => void;
   scheduleRender?: () => void;
 }) {
   const {
     canvas,
-    room,
-    handlesRef,
     getGridSize,
-    onRoomChanging,
-    onRoomChanged,
-    onSyncHandles,
+    onFinish,
+    onCancel,
+    onDrawingChange,
     scheduleRender,
   } = args;
 
   let active = false;
   let pts: Pt[] = [];
 
-  let previewLine: Line | null = null;
   let previewDots: FabricCircle[] = [];
+  let previewLines: FabricLine[] = [];
+  let lastMouse: Pt | null = null;
+  let isShiftPressed = false;
 
   const snap = (v: number, grid: number) => Math.round(v / grid) * grid;
 
@@ -62,8 +61,30 @@ export function createRoomDrawController(args: {
     return null;
   };
 
-  let previewLines: FabricLine[] = [];
-  let lastMouse: Pt | null = null;
+  const distance = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  const applyAxisLock = (next: Pt): Pt => {
+    if (!isShiftPressed || pts.length === 0) return next;
+
+    const prev = pts[pts.length - 1];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return { x: next.x, y: prev.y };
+    }
+
+    return { x: prev.x, y: next.y };
+  };
+
+  const getCloseTarget = (p: Pt): Pt | null => {
+    if (pts.length < 3) return null;
+
+    const first = pts[0];
+    if (distance(first, p) <= CLOSE_DISTANCE) return first;
+
+    return null;
+  };
 
   const removeAllPreviewArtifacts = () => {
     const objects = canvas.getObjects().slice();
@@ -75,9 +96,7 @@ export function createRoomDrawController(args: {
         kind === "room-preview-dot" ||
         kind === "room-preview-edge" ||
         kind === "room-preview-live" ||
-        kind === "room-preview-line" ||
-        kind === "room-preview-rubber" ||
-        kind === "room-preview-seg"
+        kind === "room-preview-close-dot"
       ) {
         canvas.remove(obj);
       }
@@ -85,11 +104,6 @@ export function createRoomDrawController(args: {
   };
 
   const clearPreview = () => {
-    if (previewLine) {
-      canvas.remove(previewLine);
-      previewLine = null;
-    }
-
     for (const ln of previewLines) {
       canvas.remove(ln);
     }
@@ -103,15 +117,26 @@ export function createRoomDrawController(args: {
     removeAllPreviewArtifacts();
   };
 
+  const emitDrawingChange = () => {
+    onDrawingChange?.([...pts]);
+  };
+
   const renderPreview = (mouse?: Pt) => {
     clearPreview();
 
-    previewDots = pts.map((p) => {
+    const closeTarget = mouse ? getCloseTarget(mouse) : null;
+    const liveMouse = closeTarget ?? mouse ?? null;
+
+    previewDots = pts.map((p, index) => {
+      const isFirst = index === 0;
+      const shouldHighlightAsClose =
+        !!closeTarget && isFirst && pts.length >= 3;
+
       const c = new FabricCircle({
         left: p.x,
         top: p.y,
-        radius: 5,
-        fill: "#2563eb",
+        radius: shouldHighlightAsClose ? 7 : 5,
+        fill: shouldHighlightAsClose ? "#16a34a" : "#2563eb",
         stroke: "#ffffff",
         strokeWidth: 2,
         originX: "center",
@@ -121,7 +146,13 @@ export function createRoomDrawController(args: {
         objectCaching: false,
         excludeFromExport: true,
       });
-      (c as any).data = { kind: "room-preview-dot" };
+
+      (c as any).data = {
+        kind: shouldHighlightAsClose
+          ? "room-preview-close-dot"
+          : "room-preview-dot",
+      };
+
       canvas.add(c);
       canvas.bringObjectToFront(c);
       return c;
@@ -132,30 +163,34 @@ export function createRoomDrawController(args: {
       const b = pts[i];
 
       const ln = new FabricLine([a.x, a.y, b.x, b.y], {
-        stroke: "rgba(37,99,235,0.9)",
+        stroke: "rgba(37,99,235,0.95)",
         strokeWidth: 2,
         selectable: false,
         evented: false,
         objectCaching: false,
         excludeFromExport: true,
       });
+
       (ln as any).data = { kind: "room-preview-edge" };
+
       canvas.add(ln);
       canvas.bringObjectToFront(ln);
       previewLines.push(ln);
     }
 
-    if (pts.length > 0 && mouse) {
+    if (pts.length > 0 && liveMouse) {
       const last = pts[pts.length - 1];
-      const ln = new FabricLine([last.x, last.y, mouse.x, mouse.y], {
-        stroke: "rgba(37,99,235,0.9)",
+      const ln = new FabricLine([last.x, last.y, liveMouse.x, liveMouse.y], {
+        stroke: closeTarget ? "rgba(22,163,74,0.95)" : "rgba(37,99,235,0.95)",
         strokeWidth: 2,
         selectable: false,
         evented: false,
         objectCaching: false,
         excludeFromExport: true,
       });
+
       (ln as any).data = { kind: "room-preview-live" };
+
       canvas.add(ln);
       canvas.bringObjectToFront(ln);
       previewLines.push(ln);
@@ -164,13 +199,19 @@ export function createRoomDrawController(args: {
     scheduleRender?.() ?? canvas.requestRenderAll();
   };
 
-  const finish = () => {
+  const finish = (forceClosed = false) => {
     if (pts.length < 3) return;
 
-    setRoomPoints(room, pts);
-    room.setCoords();
+    const result = [...pts];
 
-    onSyncHandles?.();
+    if (forceClosed) {
+      const first = result[0];
+      const last = result[result.length - 1];
+
+      if (first.x !== last.x || first.y !== last.y) {
+        result.push({ ...first });
+      }
+    }
 
     clearPreview();
     removeAllPreviewArtifacts();
@@ -178,7 +219,7 @@ export function createRoomDrawController(args: {
     pts = [];
     lastMouse = null;
 
-    onRoomChanged?.();
+    onFinish?.(result);
     scheduleRender?.() ?? canvas.requestRenderAll();
     stop();
   };
@@ -190,79 +231,121 @@ export function createRoomDrawController(args: {
     pts = [];
     lastMouse = null;
 
+    onCancel?.();
     scheduleRender?.() ?? canvas.requestRenderAll();
     stop();
   };
 
   const onMouseMove = (opt: any) => {
     if (!active) return;
-    const p = getPointerPt(opt);
-    if (!p) return;
-    lastMouse = p;
-    renderPreview(p);
+
+    const raw = getPointerPt(opt);
+    if (!raw) return;
+
+    const next = applyAxisLock(raw);
+    lastMouse = next;
+    renderPreview(next);
   };
 
   const onMouseDown = (opt: any) => {
     if (!active) return;
-    const p = getPointerPt(opt);
-    if (!p) return;
 
+    const raw = getPointerPt(opt);
+    if (!raw) return;
+
+    const p = applyAxisLock(raw);
     const last = pts[pts.length - 1];
+
+    const closeTarget = getCloseTarget(p);
+    if (closeTarget) {
+      finish(true);
+      return;
+    }
+
     if (last && last.x === p.x && last.y === p.y) return;
 
     pts.push(p);
-
-    onRoomChanging?.();
+    emitDrawingChange();
     renderPreview(lastMouse ?? p);
   };
 
   const onDblClick = () => {
     if (!active) return;
-    finish();
+    finish(false);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (!active) return;
 
+    if (e.key === "Shift") {
+      isShiftPressed = true;
+      if (lastMouse) {
+        const locked = applyAxisLock(lastMouse);
+        lastMouse = locked;
+        renderPreview(locked);
+      }
+      return;
+    }
+
     if (e.key === "Escape") {
       e.preventDefault();
       cancel();
+      return;
     }
 
     if (e.key === "Enter") {
       e.preventDefault();
-      finish();
+      finish(false);
+      return;
     }
 
     if (e.key === "Backspace") {
       e.preventDefault();
       pts.pop();
-      onRoomChanging?.();
-      renderPreview();
+      emitDrawingChange();
+      renderPreview(lastMouse ?? undefined);
+    }
+  };
+
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (!active) return;
+
+    if (e.key === "Shift") {
+      isShiftPressed = false;
+      if (lastMouse) {
+        renderPreview(lastMouse);
+      }
     }
   };
 
   const prevSelection = canvas.selection;
   const prevSkipTargetFind = (canvas as any).skipTargetFind;
 
-  let prevRoomSelectable = room.selectable;
-  let prevRoomEvented = (room as any).evented;
+  let previousInteractiveState = new Map<
+    any,
+    { selectable: boolean; evented: boolean }
+  >();
 
   const start = () => {
     if (active) return;
     active = true;
+
+    pts = [];
+    lastMouse = null;
+    isShiftPressed = false;
+    previousInteractiveState = new Map();
 
     canvas.discardActiveObject();
 
     canvas.selection = false;
     (canvas as any).skipTargetFind = true;
 
-
-    room.selectable = false;
-    (room as any).evented = false;
-
     canvas.forEachObject((o: any) => {
-      if (o === room) return;
+      previousInteractiveState.set(o, {
+        selectable: !!o.selectable,
+        evented: !!o.evented,
+      });
+
       o.selectable = false;
       o.evented = false;
     });
@@ -272,6 +355,7 @@ export function createRoomDrawController(args: {
     canvas.on("mouse:dblclick", onDblClick);
 
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
 
     renderPreview();
   };
@@ -285,26 +369,36 @@ export function createRoomDrawController(args: {
     canvas.off("mouse:dblclick", onDblClick);
 
     window.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("keyup", onKeyUp);
 
     canvas.selection = prevSelection ?? true;
     (canvas as any).skipTargetFind = prevSkipTargetFind ?? false;
 
-    room.selectable = prevRoomSelectable ?? true;
-    (room as any).evented = prevRoomEvented ?? true;
-
     canvas.forEachObject((o: any) => {
-      if (o === room) return;
+      const prev = previousInteractiveState.get(o);
+      if (!prev) return;
 
-      o.selectable = true;
-      o.evented = true;
+      o.selectable = prev.selectable;
+      o.evented = prev.evented;
     });
+
+    previousInteractiveState.clear();
 
     clearPreview();
     removeAllPreviewArtifacts();
     lastMouse = null;
+    isShiftPressed = false;
+
     scheduleRender?.() ?? canvas.requestRenderAll();
   };
+
   const isActive = () => active;
 
-  return { start, stop, isActive };
+  return {
+    start,
+    stop,
+    isActive,
+    finish,
+    cancel,
+  };
 }
