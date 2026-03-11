@@ -8,6 +8,7 @@ type Args = {
   scheduleRender: () => void;
   onPanEnd?: () => void;
   onViewportChange?: () => void;
+  canDragPan?: () => boolean;
 };
 
 export function attachMouseController(args: Args) {
@@ -18,6 +19,7 @@ export function attachMouseController(args: Args) {
     scheduleRender,
     onPanEnd,
     onViewportChange,
+    canDragPan,
   } = args;
 
   let isPanning = false;
@@ -49,9 +51,17 @@ export function attachMouseController(args: Args) {
 
   const onMouseDown = (opt: any) => {
     const e = opt.e as MouseEvent;
-    const isMiddle = (e.button ?? 0) === 1;
+    const button = e.button ?? 0;
+    const isMiddle = button === 1;
+    const isLeft = button === 0;
 
-    if (isSpacePressedRef.current || isMiddle) {
+    if (isMiddle || isSpacePressedRef.current) {
+      e.preventDefault();
+      startPan(e);
+      return;
+    }
+
+    if (isLeft && (canDragPan?.() ?? true)) {
       e.preventDefault();
       startPan(e);
     }

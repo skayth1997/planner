@@ -470,6 +470,9 @@ export default forwardRef<
       onViewportChange: () => {
         gridRef.current?.rebuild();
       },
+      canDragPan: () => {
+        return !drawRoomRef.current?.isActive();
+      },
     });
 
     grid.rebuild();
