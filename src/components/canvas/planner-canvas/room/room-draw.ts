@@ -218,10 +218,11 @@ export function createRoomDrawController(args: {
 
     pts = [];
     lastMouse = null;
+    isShiftPressed = false;
 
+    stop();
     onFinish?.(result);
     scheduleRender?.() ?? canvas.requestRenderAll();
-    stop();
   };
 
   const cancel = () => {
@@ -230,10 +231,11 @@ export function createRoomDrawController(args: {
 
     pts = [];
     lastMouse = null;
+    isShiftPressed = false;
 
+    stop();
     onCancel?.();
     scheduleRender?.() ?? canvas.requestRenderAll();
-    stop();
   };
 
   const onMouseMove = (opt: any) => {

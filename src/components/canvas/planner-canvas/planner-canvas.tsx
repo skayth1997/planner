@@ -6,7 +6,7 @@ import React, {
   useImperativeHandle,
   useRef,
 } from "react";
-import { Canvas, Polygon, Point } from "fabric";
+import { Canvas, Polygon, Point, Line, Path } from "fabric";
 
 import {
   GRID_SIZE,
@@ -27,8 +27,20 @@ import { createRoomDrawController } from "./room/room-draw";
 import { createRenderScheduler } from "./core/render";
 import { attachMouseController } from "./input/mouse-controller";
 import { createGridController } from "./grid/grid-controller";
+import { insetPolygon } from "./room/polygon-geometry";
 
 type GridController = ReturnType<typeof createGridController>;
+
+type RoomVisual = {
+  id: string;
+  outer: Polygon;
+  inner: Polygon;
+  wallFill: Polygon;
+  hatches: Line[];
+};
+
+const WALL_THICKNESS = 20;
+const HATCH_SPACING = 7;
 
 function normalizeRoomPoints(points: Pt[]) {
   const xs = points.map((p) => p.x);
@@ -69,40 +81,34 @@ function removeClosingPoint(points: Pt[]) {
   return points;
 }
 
-function createRoomPolygonFromPoints(points: Pt[], roomId: string) {
+function applyPolygonAbsolutePoints(
+  polygon: Polygon,
+  points: Pt[],
+  extra?: Partial<Polygon>
+) {
   const cleanPoints = removeClosingPoint(points);
   const { left, top, width, height, localPoints } = normalizeRoomPoints(
     cleanPoints
   );
 
-  const room = new Polygon(localPoints as any, {
+  polygon.set({
     left,
     top,
     originX: "left",
     originY: "top",
     width,
     height,
+    points: localPoints as any,
     pathOffset: new Point(width / 2, height / 2),
-
-    fill: "rgba(59,130,246,0.15)",
-    stroke: "#3b82f6",
-    strokeWidth: 3,
-    selectable: false,
-    evented: false,
-    objectCaching: false,
-    perPixelTargetFind: false,
+    ...extra,
   });
 
-  (room as any).data = {
-    kind: "room",
-    id: roomId,
-  };
-
-  return room;
+  polygon.setCoords();
 }
 
 function getRoomAbsoluteBounds(room: Polygon) {
   const r = room.getBoundingRect();
+
   return {
     left: r.left,
     top: r.top,
@@ -154,20 +160,220 @@ function fitObjectsToView(canvas: Canvas, objects: Polygon[], padding = 40) {
   canvas.requestRenderAll();
 }
 
+function createAbsoluteClipPolygon(points: Pt[]) {
+  return new Polygon(points as any, {
+    absolutePositioned: true,
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+  });
+}
+
+function createWallBandClipPath(outerPoints: Pt[], innerPoints: Pt[]) {
+  const outerPath = outerPoints.map((p) => `${p.x} ${p.y}`).join(" L ");
+  const innerPath = [...innerPoints]
+    .reverse()
+    .map((p) => `${p.x} ${p.y}`)
+    .join(" L ");
+
+  return new Path(`M ${outerPath} Z M ${innerPath} Z`, {
+    absolutePositioned: true,
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+    fill: "#000",
+    excludeFromExport: true,
+  });
+}
+
+function createWallFillPolygon(outerPoints: Pt[]) {
+  const wallFill = new Polygon([], {
+    fill: "#fff",
+    strokeWidth: 0,
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+    perPixelTargetFind: false,
+  });
+
+  applyPolygonAbsolutePoints(wallFill, outerPoints);
+
+  return wallFill;
+}
+
+function createWallHatches(
+  outerPoints: Pt[],
+  innerPoints: Pt[],
+  roomId: string
+): Line[] {
+  const xs = outerPoints.map((p) => p.x);
+  const ys = outerPoints.map((p) => p.y);
+
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const overscan = Math.max(width, height) + 400;
+
+  const wallBandClip = createWallBandClipPath(outerPoints, innerPoints);
+  const lines: Line[] = [];
+
+  for (
+    let offset = minX - overscan;
+    offset <= maxX + overscan;
+    offset += HATCH_SPACING
+  ) {
+    const x1 = offset;
+    const y1 = maxY + overscan;
+
+    const x2 = offset + overscan;
+    const y2 = maxY - overscan;
+
+    const line = new Line([x1, y1, x2, y2], {
+      stroke: "#000",
+      strokeWidth: 1,
+      selectable: false,
+      evented: false,
+      objectCaching: false,
+      excludeFromExport: true,
+      strokeUniform: true,
+    });
+
+    (line as any).clipPath = wallBandClip;
+    (line as any).data = {
+      kind: "room-hatch",
+      roomId,
+    };
+
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+function createRoomVisual(points: Pt[], roomId: string): RoomVisual {
+  const cleanPoints = removeClosingPoint(points);
+  const innerPoints = insetPolygon(cleanPoints, WALL_THICKNESS);
+
+  const wallFill = createWallFillPolygon(cleanPoints);
+
+  const outer = new Polygon([], {
+    fill: "transparent",
+    stroke: "#111827",
+    strokeWidth: 2,
+    strokeLineJoin: "miter",
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+    perPixelTargetFind: false,
+    strokeUniform: true,
+  });
+
+  (outer as any).data = {
+    kind: "room",
+    id: roomId,
+    role: "outer",
+  };
+
+  applyPolygonAbsolutePoints(outer, cleanPoints);
+
+  const inner = new Polygon([], {
+    fill: "#fff",
+    stroke: "#111827",
+    strokeWidth: 2,
+    strokeLineJoin: "miter",
+    selectable: false,
+    evented: false,
+    objectCaching: false,
+    perPixelTargetFind: false,
+    strokeUniform: true,
+  });
+
+  (inner as any).data = {
+    kind: "room-inner",
+    id: `${roomId}-inner`,
+    roomId,
+    role: "inner",
+  };
+
+  applyPolygonAbsolutePoints(inner, innerPoints);
+
+  const hatches = createWallHatches(cleanPoints, innerPoints, roomId);
+
+  return {
+    id: roomId,
+    outer,
+    inner,
+    wallFill,
+    hatches,
+  };
+}
+
+function updateRoomVisual(room: RoomVisual, points: Pt[]) {
+  const cleanPoints = removeClosingPoint(points);
+  const innerPoints = insetPolygon(cleanPoints, WALL_THICKNESS);
+
+  applyPolygonAbsolutePoints(room.wallFill, cleanPoints, {
+    fill: "#f4f2ec",
+    strokeWidth: 0,
+  });
+
+  applyPolygonAbsolutePoints(room.outer, cleanPoints, {
+    fill: "transparent",
+    stroke: "#111827",
+    strokeWidth: 2,
+  });
+
+  applyPolygonAbsolutePoints(room.inner, innerPoints, {
+    fill: "#f3f4f6",
+    stroke: "#111827",
+    strokeWidth: 2,
+  });
+
+  room.hatches = createWallHatches(cleanPoints, innerPoints, room.id);
+}
+
+function removeRoomVisual(canvas: Canvas, room: RoomVisual) {
+  for (const hatch of room.hatches) {
+    canvas.remove(hatch);
+  }
+
+  canvas.remove(room.inner);
+  canvas.remove(room.outer);
+  canvas.remove(room.wallFill);
+}
+
+function addRoomVisualToCanvas(canvas: Canvas, room: RoomVisual) {
+  canvas.add(room.wallFill);
+
+  for (const hatch of room.hatches) {
+    canvas.add(hatch);
+  }
+
+  canvas.add(room.outer);
+  canvas.add(room.inner);
+
+  canvas.bringObjectToFront(room.outer);
+  canvas.bringObjectToFront(room.inner);
+}
+
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
+  >(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
-  const roomsRef = useRef<Polygon[]>([]);
+  const roomsRef = useRef<RoomVisual[]>([]);
 
   const gridRef = useRef<GridController | null>(null);
   const drawRoomRef = useRef<ReturnType<
     typeof createRoomDrawController
-  > | null>(null);
+    > | null>(null);
 
   const scheduleRenderRef = useRef<null | (() => void)>(null);
   const isSpacePressedRef = useRef(false);
@@ -182,10 +388,6 @@ export default forwardRef<
 
   const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
 
-  const getRooms = () => {
-    return roomsRef.current;
-  };
-
   const getLastRoom = () => {
     const rooms = roomsRef.current;
     return rooms.length ? rooms[rooms.length - 1] : null;
@@ -195,7 +397,7 @@ export default forwardRef<
     const room = getLastRoom();
     if (!room) return { width: 0, height: 0 };
 
-    const r = room.getBoundingRect();
+    const r = room.outer.getBoundingRect();
     return {
       width: Math.round(r.width),
       height: Math.round(r.height),
@@ -212,7 +414,7 @@ export default forwardRef<
     const targetW = Math.max(min, Math.round(Number(size.width)));
     const targetH = Math.max(min, Math.round(Number(size.height)));
 
-    const r = room.getBoundingRect();
+    const r = room.outer.getBoundingRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
 
@@ -226,30 +428,11 @@ export default forwardRef<
       { x: left, y: top + targetH },
     ];
 
-    const cleanPoints = removeClosingPoint(points);
-    const {
-      left: nextLeft,
-      top: nextTop,
-      width,
-      height,
-      localPoints,
-    } = normalizeRoomPoints(cleanPoints);
-
-    room.set({
-      left: nextLeft,
-      top: nextTop,
-      originX: "left",
-      originY: "top",
-      width,
-      height,
-      points: localPoints as any,
-      pathOffset: new Point(width / 2, height / 2),
-    });
-
-    room.setCoords();
+    removeRoomVisual(canvas, room);
+    updateRoomVisual(room, points);
+    addRoomVisualToCanvas(canvas, room);
 
     gridRef.current?.rebuild();
-    fitObjectsToView(canvas, roomsRef.current);
     safeRender();
   };
 
@@ -286,13 +469,12 @@ export default forwardRef<
         if (points.length < 3) return;
 
         const roomId = `room-${roomsRef.current.length + 1}`;
-        const room = createRoomPolygonFromPoints(points, roomId);
+        const room = createRoomVisual(points, roomId);
 
         roomsRef.current.push(room);
-        canvas.add(room);
+        addRoomVisualToCanvas(canvas, room);
 
         gridRef.current?.rebuild();
-        fitObjectsToView(canvas, roomsRef.current);
         safeRender();
       },
       onCancel: () => {
@@ -313,11 +495,6 @@ export default forwardRef<
       });
 
       canvas.calcOffset();
-
-      if (roomsRef.current.length) {
-        fitObjectsToView(canvas, roomsRef.current);
-      }
-
       gridRef.current?.rebuild();
       scheduleRender();
     };
@@ -365,33 +542,27 @@ export default forwardRef<
     ref,
     () => ({
       addFurniture(_: FurnitureType) {},
-
       deleteSelected() {},
-
       duplicateSelected() {},
-
       setSelectedProps() {},
-
       toggleSelectedDoor() {},
 
       fitRoom() {
         const canvas = fabricCanvasRef.current;
         if (!canvas || !roomsRef.current.length) return;
 
-        fitObjectsToView(canvas, roomsRef.current);
+        fitObjectsToView(
+          canvas,
+          roomsRef.current.map((r) => r.outer)
+        );
         safeRender();
       },
 
       undo() {},
-
       redo() {},
-
       save() {},
-
       load() {},
-
       exportJson() {},
-
       importJsonString() {},
 
       getRoomSize() {
@@ -411,7 +582,6 @@ export default forwardRef<
       },
 
       addDoor() {},
-
       addWindow() {},
 
       isDrawingRoom() {
@@ -423,14 +593,21 @@ export default forwardRef<
       },
 
       stopDrawRoom() {
-        drawRoomRef.current?.stop();
+        const controller = drawRoomRef.current;
+        if (!controller) return;
+
+        if (controller.isActive()) {
+          controller.finish();
+        } else {
+          controller.stop();
+        }
       },
 
       addRoom() {},
 
       getActiveRoomId() {
         const room = getLastRoom();
-        return room ? (room as any).data?.id ?? null : null;
+        return room ? room.id : null;
       },
 
       setActiveRoom() {},
