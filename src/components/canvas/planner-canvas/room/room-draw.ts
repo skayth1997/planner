@@ -1,8 +1,172 @@
-import type { Canvas, Line } from "fabric";
-import { Circle as FabricCircle, Line as FabricLine, util } from "fabric";
+import type { Canvas, Line, Polygon, Path } from "fabric";
+import {
+  Circle as FabricCircle,
+  Line as FabricLine,
+  Polygon as FabricPolygon,
+  Path as FabricPath,
+  Pattern,
+  Point,
+  util,
+} from "fabric";
 import type { Pt } from "../core/planner-types";
+import { insetPolygon } from "./polygon-geometry";
 
 const CLOSE_DISTANCE = 16;
+
+const CURSOR_WALL_SIZE = 20;
+const CURSOR_WALL_THICKNESS = 8;
+const CURSOR_OFFSET = 0;
+
+let cachedCursorWallPatternSource: HTMLCanvasElement | null = null;
+
+function normalizeRoomPoints(points: Pt[]) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+
+  const localPoints = points.map((p) => ({
+    x: p.x - minX,
+    y: p.y - minY,
+  }));
+
+  return {
+    left: minX,
+    top: minY,
+    width,
+    height,
+    localPoints,
+  };
+}
+
+function removeClosingPoint(points: Pt[]) {
+  if (points.length < 2) return points;
+
+  const first = points[0];
+  const last = points[points.length - 1];
+
+  if (first.x === last.x && first.y === last.y) {
+    return points.slice(0, -1);
+  }
+
+  return points;
+}
+
+function applyPolygonAbsolutePoints(
+  polygon: Polygon,
+  points: Pt[],
+  extra?: Partial<Polygon>
+) {
+  const cleanPoints = removeClosingPoint(points);
+  const { left, top, width, height, localPoints } =
+    normalizeRoomPoints(cleanPoints);
+
+  polygon.set({
+    left,
+    top,
+    originX: "left",
+    originY: "top",
+    width,
+    height,
+    points: localPoints as any,
+    pathOffset: new Point(width / 2, height / 2),
+    ...extra,
+  });
+
+  polygon.setCoords();
+}
+
+function pointsToPath(points: Pt[]) {
+  if (!points.length) return "";
+
+  const [first, ...rest] = points;
+  return (
+    `M ${first.x} ${first.y} ` +
+    rest.map((p) => `L ${p.x} ${p.y}`).join(" ") +
+    " Z"
+  );
+}
+
+function getCursorWallPatternSource() {
+  if (cachedCursorWallPatternSource) return cachedCursorWallPatternSource;
+
+  const size = 10;
+  const patternCanvas = document.createElement("canvas");
+  patternCanvas.width = size;
+  patternCanvas.height = size;
+
+  const ctx = patternCanvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.clearRect(0, 0, size, size);
+
+  ctx.strokeStyle = "rgba(17,24,39,0.7)";
+  ctx.lineWidth = 1;
+
+  ctx.beginPath();
+  ctx.moveTo(0, size);
+  ctx.lineTo(size, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(-size, size);
+  ctx.lineTo(0, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(size, size);
+  ctx.lineTo(size * 2, 0);
+  ctx.stroke();
+
+  cachedCursorWallPatternSource = patternCanvas;
+  return patternCanvas;
+}
+
+function createCursorWallBandPath(outerPoints: Pt[], innerPoints: Pt[]) {
+  const outerPath = pointsToPath(outerPoints);
+  const innerPath = pointsToPath([...innerPoints].reverse());
+
+  const patternSource = getCursorWallPatternSource();
+
+  return new FabricPath(`${outerPath} ${innerPath}`, {
+    fill: patternSource
+      ? new Pattern({
+        source: patternSource,
+        repeat: "repeat",
+      })
+      : "#f4f2ec",
+    strokeWidth: 0,
+    selectable: false,
+    evented: false,
+    objectCaching: true,
+    excludeFromExport: true,
+  });
+}
+
+function buildCursorWallPoints(anchor: Pt) {
+  const size = CURSOR_WALL_SIZE;
+  const half = size / 2;
+
+  const left = anchor.x - half;
+  const top = anchor.y - half;
+
+  const outer: Pt[] = [
+    { x: left, y: top },
+    { x: left + size, y: top },
+    { x: left + size, y: top + size },
+    { x: left, y: top + size },
+  ];
+
+  const inner = insetPolygon(outer, CURSOR_WALL_THICKNESS);
+
+  return { outer, inner };
+}
 
 export function createRoomDrawController(args: {
   canvas: Canvas;
@@ -26,6 +190,11 @@ export function createRoomDrawController(args: {
 
   let previewDots: FabricCircle[] = [];
   let previewLines: FabricLine[] = [];
+
+  let cursorOuter: Polygon | null = null;
+  let cursorInner: Polygon | null = null;
+  let cursorWallBand: Path | null = null;
+
   let lastMouse: Pt | null = null;
   let isShiftPressed = false;
 
@@ -96,10 +265,30 @@ export function createRoomDrawController(args: {
         kind === "room-preview-dot" ||
         kind === "room-preview-edge" ||
         kind === "room-preview-live" ||
-        kind === "room-preview-close-dot"
+        kind === "room-preview-close-dot" ||
+        kind === "room-preview-cursor-wall-band" ||
+        kind === "room-preview-cursor-outer" ||
+        kind === "room-preview-cursor-inner"
       ) {
         canvas.remove(obj);
       }
+    }
+  };
+
+  const clearCursorPreview = () => {
+    if (cursorWallBand) {
+      canvas.remove(cursorWallBand);
+      cursorWallBand = null;
+    }
+
+    if (cursorOuter) {
+      canvas.remove(cursorOuter);
+      cursorOuter = null;
+    }
+
+    if (cursorInner) {
+      canvas.remove(cursorInner);
+      cursorInner = null;
     }
   };
 
@@ -114,6 +303,7 @@ export function createRoomDrawController(args: {
     }
     previewDots = [];
 
+    clearCursorPreview();
     removeAllPreviewArtifacts();
   };
 
@@ -121,8 +311,67 @@ export function createRoomDrawController(args: {
     onDrawingChange?.([...pts]);
   };
 
+  const renderCursorPreview = (mouse: Pt) => {
+    clearCursorPreview();
+
+    const { outer, inner } = buildCursorWallPoints(mouse);
+
+    cursorWallBand = createCursorWallBandPath(outer, inner);
+    (cursorWallBand as any).data = {
+      kind: "room-preview-cursor-wall-band",
+    };
+    canvas.add(cursorWallBand);
+
+    cursorOuter = new FabricPolygon([], {
+      fill: "transparent",
+      stroke: "#111827",
+      strokeWidth: 1.8,
+      strokeLineJoin: "miter",
+      selectable: false,
+      evented: false,
+      objectCaching: true,
+      perPixelTargetFind: false,
+      strokeUniform: true,
+      excludeFromExport: true,
+    });
+    (cursorOuter as any).data = {
+      kind: "room-preview-cursor-outer",
+    };
+    applyPolygonAbsolutePoints(cursorOuter, outer);
+    canvas.add(cursorOuter);
+
+    cursorInner = new FabricPolygon([], {
+      fill: "#ffffff",
+      stroke: "#111827",
+      strokeWidth: 1.8,
+      strokeLineJoin: "miter",
+      selectable: false,
+      evented: false,
+      objectCaching: true,
+      perPixelTargetFind: false,
+      strokeUniform: true,
+      excludeFromExport: true,
+    });
+    (cursorInner as any).data = {
+      kind: "room-preview-cursor-inner",
+    };
+    applyPolygonAbsolutePoints(cursorInner, inner);
+    canvas.add(cursorInner);
+
+    canvas.bringObjectToFront(cursorOuter);
+    canvas.bringObjectToFront(cursorInner);
+  };
+
   const renderPreview = (mouse?: Pt) => {
-    clearPreview();
+    for (const ln of previewLines) {
+      canvas.remove(ln);
+    }
+    previewLines = [];
+
+    for (const d of previewDots) {
+      canvas.remove(d);
+    }
+    previewDots = [];
 
     const closeTarget = mouse ? getCloseTarget(mouse) : null;
     const liveMouse = closeTarget ?? mouse ?? null;
@@ -246,6 +495,8 @@ export function createRoomDrawController(args: {
 
     const next = applyAxisLock(raw);
     lastMouse = next;
+
+    renderCursorPreview(next);
     renderPreview(next);
   };
 
@@ -284,6 +535,7 @@ export function createRoomDrawController(args: {
       if (lastMouse) {
         const locked = applyAxisLock(lastMouse);
         lastMouse = locked;
+        renderCursorPreview(locked);
         renderPreview(locked);
       }
       return;
@@ -315,6 +567,7 @@ export function createRoomDrawController(args: {
     if (e.key === "Shift") {
       isShiftPressed = false;
       if (lastMouse) {
+        renderCursorPreview(lastMouse);
         renderPreview(lastMouse);
       }
     }
@@ -326,7 +579,7 @@ export function createRoomDrawController(args: {
   let previousInteractiveState = new Map<
     any,
     { selectable: boolean; evented: boolean }
-  >();
+    >();
 
   const start = () => {
     if (active) return;
