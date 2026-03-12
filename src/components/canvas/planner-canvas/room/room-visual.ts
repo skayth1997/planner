@@ -15,6 +15,10 @@ export type RoomVisual = {
   wallBand: Path;
 };
 
+export type WallStripVisual = {
+  band: Polygon;
+};
+
 export const WALL_THICKNESS = 20;
 
 let cachedWallPatternSource: HTMLCanvasElement | null = null;
@@ -68,24 +72,112 @@ function getWallPatternSource() {
   return patternCanvas;
 }
 
+function createWallPatternFill() {
+  const patternSource = getWallPatternSource();
+
+  return patternSource
+    ? new Pattern({
+        source: patternSource,
+        repeat: "repeat",
+      })
+    : "#f4f2ec";
+}
+
 function createWallBandPath(outerPoints: Pt[], innerPoints: Pt[]) {
   const outerPath = pointsToPath(outerPoints);
   const innerPath = pointsToPath([...innerPoints].reverse());
 
-  const patternSource = getWallPatternSource();
-
   return new Path(`${outerPath} ${innerPath}`, {
-    fill: patternSource
-      ? new Pattern({
-          source: patternSource,
-          repeat: "repeat",
-        })
-      : "#f4f2ec",
+    fill: createWallPatternFill(),
     strokeWidth: 0,
     selectable: false,
     evented: false,
     objectCaching: true,
   });
+}
+
+function buildWallStripPoints(a: Pt, b: Pt, thickness = WALL_THICKNESS): Pt[] {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+
+  if (len < 0.0001) {
+    const half = thickness / 2;
+    return [
+      { x: a.x - half, y: a.y - half },
+      { x: a.x + half, y: a.y - half },
+      { x: a.x + half, y: a.y + half },
+      { x: a.x - half, y: a.y + half },
+    ];
+  }
+
+  const nx = -dy / len;
+  const ny = dx / len;
+  const half = thickness / 2;
+
+  return [
+    { x: a.x + nx * half, y: a.y + ny * half },
+    { x: b.x + nx * half, y: b.y + ny * half },
+    { x: b.x - nx * half, y: b.y - ny * half },
+    { x: a.x - nx * half, y: a.y - ny * half },
+  ];
+}
+
+export function createWallStripVisual(
+  a: Pt,
+  b: Pt,
+  options?: {
+    kind?: string;
+    excludeFromExport?: boolean;
+  }
+): WallStripVisual {
+  const band = new Polygon([], {
+    fill: createWallPatternFill(),
+    stroke: "#111827",
+    strokeWidth: 1.8,
+    strokeLineJoin: "miter",
+    selectable: false,
+    evented: false,
+    objectCaching: true,
+    perPixelTargetFind: false,
+    strokeUniform: true,
+    excludeFromExport: options?.excludeFromExport ?? false,
+  });
+
+  (band as any).data = {
+    kind: options?.kind ?? "wall-strip",
+  };
+
+  applyPolygonAbsolutePoints(band, buildWallStripPoints(a, b));
+
+  return { band };
+}
+
+export function updateWallStripVisual(
+  wall: WallStripVisual,
+  a: Pt,
+  b: Pt,
+  options?: {
+    excludeFromExport?: boolean;
+  }
+) {
+  applyPolygonAbsolutePoints(wall.band, buildWallStripPoints(a, b), {
+    fill: createWallPatternFill(),
+    stroke: "#111827",
+    strokeWidth: 1.8,
+    excludeFromExport: options?.excludeFromExport ?? false,
+  });
+}
+
+export function addWallStripVisualToCanvas(
+  canvas: Canvas,
+  wall: WallStripVisual
+) {
+  canvas.add(wall.band);
+}
+
+export function removeWallStripVisual(canvas: Canvas, wall: WallStripVisual) {
+  canvas.remove(wall.band);
 }
 
 export function createRoomVisual(points: Pt[], roomId: string): RoomVisual {

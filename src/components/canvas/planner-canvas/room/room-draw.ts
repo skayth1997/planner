@@ -1,7 +1,5 @@
-import type { Canvas, Line, Polygon, Path } from "fabric";
+import type { Canvas, Polygon, Path } from "fabric";
 import {
-  Circle as FabricCircle,
-  Line as FabricLine,
   Polygon as FabricPolygon,
   Path as FabricPath,
   Pattern,
@@ -10,12 +8,17 @@ import {
 } from "fabric";
 import type { Pt } from "../core/planner-types";
 import { insetPolygon } from "./polygon-geometry";
+import {
+  createWallStripVisual,
+  addWallStripVisualToCanvas,
+  removeWallStripVisual,
+  type WallStripVisual,
+} from "./room-visual";
 
 const CLOSE_DISTANCE = 16;
 
 const CURSOR_WALL_SIZE = 20;
 const CURSOR_WALL_THICKNESS = 8;
-const CURSOR_OFFSET = 0;
 
 let cachedCursorWallPatternSource: HTMLCanvasElement | null = null;
 
@@ -188,8 +191,7 @@ export function createRoomDrawController(args: {
   let active = false;
   let pts: Pt[] = [];
 
-  let previewDots: FabricCircle[] = [];
-  let previewLines: FabricLine[] = [];
+  let previewWalls: WallStripVisual[] = [];
 
   let cursorOuter: Polygon | null = null;
   let cursorInner: Polygon | null = null;
@@ -262,10 +264,7 @@ export function createRoomDrawController(args: {
       const kind = obj?.data?.kind;
 
       if (
-        kind === "room-preview-dot" ||
-        kind === "room-preview-edge" ||
-        kind === "room-preview-live" ||
-        kind === "room-preview-close-dot" ||
+        kind === "room-preview-wall-strip" ||
         kind === "room-preview-cursor-wall-band" ||
         kind === "room-preview-cursor-outer" ||
         kind === "room-preview-cursor-inner"
@@ -293,15 +292,10 @@ export function createRoomDrawController(args: {
   };
 
   const clearPreview = () => {
-    for (const ln of previewLines) {
-      canvas.remove(ln);
+    for (const wall of previewWalls) {
+      removeWallStripVisual(canvas, wall);
     }
-    previewLines = [];
-
-    for (const d of previewDots) {
-      canvas.remove(d);
-    }
-    previewDots = [];
+    previewWalls = [];
 
     clearCursorPreview();
     removeAllPreviewArtifacts();
@@ -363,86 +357,27 @@ export function createRoomDrawController(args: {
   };
 
   const renderPreview = (mouse?: Pt) => {
-    for (const ln of previewLines) {
-      canvas.remove(ln);
+    for (const wall of previewWalls) {
+      removeWallStripVisual(canvas, wall);
     }
-    previewLines = [];
-
-    for (const d of previewDots) {
-      canvas.remove(d);
-    }
-    previewDots = [];
+    previewWalls = [];
 
     const closeTarget = mouse ? getCloseTarget(mouse) : null;
     const liveMouse = closeTarget ?? mouse ?? null;
 
-    previewDots = pts.map((p, index) => {
-      const isFirst = index === 0;
-      const shouldHighlightAsClose =
-        !!closeTarget && isFirst && pts.length >= 3;
+    const chainPoints = liveMouse ? [...pts, liveMouse] : [...pts];
 
-      const c = new FabricCircle({
-        left: p.x,
-        top: p.y,
-        radius: shouldHighlightAsClose ? 7 : 5,
-        fill: shouldHighlightAsClose ? "#16a34a" : "#2563eb",
-        stroke: "#ffffff",
-        strokeWidth: 2,
-        originX: "center",
-        originY: "center",
-        selectable: false,
-        evented: false,
-        objectCaching: false,
+    for (let i = 1; i < chainPoints.length; i++) {
+      const a = chainPoints[i - 1];
+      const b = chainPoints[i];
+
+      const wall = createWallStripVisual(a, b, {
+        kind: "room-preview-wall-strip",
         excludeFromExport: true,
       });
 
-      (c as any).data = {
-        kind: shouldHighlightAsClose
-          ? "room-preview-close-dot"
-          : "room-preview-dot",
-      };
-
-      canvas.add(c);
-      canvas.bringObjectToFront(c);
-      return c;
-    });
-
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1];
-      const b = pts[i];
-
-      const ln = new FabricLine([a.x, a.y, b.x, b.y], {
-        stroke: "rgba(37,99,235,0.95)",
-        strokeWidth: 2,
-        selectable: false,
-        evented: false,
-        objectCaching: false,
-        excludeFromExport: true,
-      });
-
-      (ln as any).data = { kind: "room-preview-edge" };
-
-      canvas.add(ln);
-      canvas.bringObjectToFront(ln);
-      previewLines.push(ln);
-    }
-
-    if (pts.length > 0 && liveMouse) {
-      const last = pts[pts.length - 1];
-      const ln = new FabricLine([last.x, last.y, liveMouse.x, liveMouse.y], {
-        stroke: closeTarget ? "rgba(22,163,74,0.95)" : "rgba(37,99,235,0.95)",
-        strokeWidth: 2,
-        selectable: false,
-        evented: false,
-        objectCaching: false,
-        excludeFromExport: true,
-      });
-
-      (ln as any).data = { kind: "room-preview-live" };
-
-      canvas.add(ln);
-      canvas.bringObjectToFront(ln);
-      previewLines.push(ln);
+      addWallStripVisualToCanvas(canvas, wall);
+      previewWalls.push(wall);
     }
 
     scheduleRender?.() ?? canvas.requestRenderAll();
