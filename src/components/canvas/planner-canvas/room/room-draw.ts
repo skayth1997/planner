@@ -14,20 +14,12 @@ import {
 
 export function createRoomDrawController(args: {
   canvas: Canvas;
-  getGridSize: () => number;
   onFinish?: (points: Pt[]) => void;
   onCancel?: () => void;
   onDrawingChange?: (points: Pt[]) => void;
   scheduleRender?: () => void;
 }) {
-  const {
-    canvas,
-    getGridSize,
-    onFinish,
-    onCancel,
-    onDrawingChange,
-    scheduleRender,
-  } = args;
+  const { canvas, onFinish, onCancel, onDrawingChange, scheduleRender } = args;
 
   let isDrawing = false;
   let drawPoints: Pt[] = [];
@@ -92,7 +84,7 @@ export function createRoomDrawController(args: {
   const onMouseMove = (opt: any) => {
     if (!isDrawing) return;
 
-    const raw = getPointerPoint(canvas, opt, getGridSize);
+    const raw = getPointerPoint(canvas, opt);
     if (!raw) return;
 
     const next = applyAxisLock({
@@ -115,7 +107,7 @@ export function createRoomDrawController(args: {
   const onMouseDown = (opt: any) => {
     if (!isDrawing) return;
 
-    const raw = getPointerPoint(canvas, opt, getGridSize);
+    const raw = getPointerPoint(canvas, opt);
     if (!raw) return;
 
     const point = applyAxisLock({

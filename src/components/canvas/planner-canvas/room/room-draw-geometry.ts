@@ -4,23 +4,11 @@ import type { Pt } from "../core/planner-types";
 
 export const CLOSE_DISTANCE = 16;
 
-export function snapToGrid(value: number, grid: number) {
-  return Math.round(value / grid) * grid;
-}
-
-export function getPointerPoint(
-  canvas: Canvas,
-  opt: any,
-  getGridSize: () => number
-): Pt | null {
+export function getPointerPoint(canvas: Canvas, opt: any): Pt | null {
   const p = opt?.absolutePointer ?? opt?.pointer ?? opt?.scenePoint ?? null;
 
   if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
-    const g = Math.max(1, getGridSize());
-    return {
-      x: snapToGrid(p.x, g),
-      y: snapToGrid(p.y, g),
-    };
+    return { x: p.x, y: p.y };
   }
 
   const vp = opt?.viewportPoint;
@@ -30,12 +18,8 @@ export function getPointerPoint(
     if (vt && util?.invertTransform && util?.transformPoint) {
       const inv = util.invertTransform(vt);
       const sp = util.transformPoint(vp, inv);
-      const g = Math.max(1, getGridSize());
 
-      return {
-        x: snapToGrid(sp.x, g),
-        y: snapToGrid(sp.y, g),
-      };
+      return { x: sp.x, y: sp.y };
     }
   }
 
@@ -43,12 +27,7 @@ export function getPointerPoint(
     const pp = (canvas as any).getPointer(opt?.e);
 
     if (pp && Number.isFinite(pp.x) && Number.isFinite(pp.y)) {
-      const g = Math.max(1, getGridSize());
-
-      return {
-        x: snapToGrid(pp.x, g),
-        y: snapToGrid(pp.y, g),
-      };
+      return { x: pp.x, y: pp.y };
     }
   }
 

@@ -66,8 +66,6 @@ export default forwardRef<
     else canvas.requestRenderAll();
   };
 
-  const getGridSize = () => gridRef.current?.getSize() ?? GRID_SIZE;
-
   const getLastRoom = () => {
     const rooms = roomsRef.current;
     return rooms.length ? rooms[rooms.length - 1] : null;
@@ -143,7 +141,6 @@ export default forwardRef<
 
     drawRoomRef.current = createRoomDrawController({
       canvas,
-      getGridSize: () => getGridSize(),
       scheduleRender,
       onFinish: (points) => {
         if (points.length < 3) return;
