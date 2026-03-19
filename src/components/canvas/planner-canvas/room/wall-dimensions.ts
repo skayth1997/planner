@@ -122,20 +122,54 @@ function midpoint(a: Pt, b: Pt): Pt {
   };
 }
 
-function pointOnOffsetTrack(args: {
-  origin: Pt;
-  ux: number;
-  uy: number;
-  nx: number;
-  ny: number;
-  axisDistance: number;
-  normalOffset: number;
-}): Pt {
-  const { origin, ux, uy, nx, ny, axisDistance, normalOffset } = args;
+function dot(a: Pt, b: Pt) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function createOffsetDimensionSegmentFromFace(args: {
+  faceStart: Pt;
+  faceEnd: Pt;
+  wallCenterMid: Pt;
+  offset: number;
+}) {
+  const { faceStart, faceEnd, wallCenterMid, offset } = args;
+
+  const dx = faceEnd.x - faceStart.x;
+  const dy = faceEnd.y - faceStart.y;
+  const len = Math.hypot(dx, dy) || 1;
+
+  let ux = dx / len;
+  let uy = dy / len;
+
+  let nx = -uy;
+  let ny = ux;
+
+  const faceMid = midpoint(faceStart, faceEnd);
+  const awayFromCenter = {
+    x: faceMid.x - wallCenterMid.x,
+    y: faceMid.y - wallCenterMid.y,
+  };
+
+  if (dot({ x: nx, y: ny }, awayFromCenter) < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
 
   return {
-    x: origin.x + ux * axisDistance + nx * normalOffset,
-    y: origin.y + uy * axisDistance + ny * normalOffset,
+    start: {
+      x: faceStart.x + nx * offset,
+      y: faceStart.y + ny * offset,
+    },
+    end: {
+      x: faceEnd.x + nx * offset,
+      y: faceEnd.y + ny * offset,
+    },
+    ux,
+    uy,
+    nx,
+    ny,
+    length: len,
+    mid: faceMid,
   };
 }
 
@@ -161,9 +195,6 @@ export function createWallDimensions(
   const ux = dx / baseLength;
   const uy = dy / baseLength;
 
-  const nx = -uy;
-  const ny = ux;
-
   const angleRad = Math.atan2(dy, dx);
   const angleDeg = normalizeTextAngle((angleRad * 180) / Math.PI);
 
@@ -183,135 +214,67 @@ export function createWallDimensions(
   const hasStartJoin = !!options?.startJoinOther;
   const hasEndJoin = !!options?.endJoinOther;
 
-  const startReduction = hasStartJoin ? thickness : 0;
-  const endReduction = hasEndJoin ? thickness : 0;
-  const totalReduction = startReduction + endReduction;
+  const topIsPreserved = geometricTopLength >= geometricBottomLength;
 
-  let topDisplayLength = baseLength;
-  let bottomDisplayLength = baseLength;
+  const wallCenterMid = midpoint(centerA, centerB);
+  const mainOffset = 16;
 
-  let topIsPreserved = true;
-
-  if (totalReduction > 0) {
-    const reducedLength = Math.max(0, baseLength - totalReduction);
-    topIsPreserved = geometricTopLength >= geometricBottomLength;
-
-    if (topIsPreserved) {
-      topDisplayLength = baseLength;
-      bottomDisplayLength = reducedLength;
-    } else {
-      topDisplayLength = reducedLength;
-      bottomDisplayLength = baseLength;
-    }
-  }
-
-  const innerStartExtend = 4;
-  const innerEndExtend = 4;
-
-  const topStartAxis =
-    totalReduction === 0 || topIsPreserved
-      ? 0
-      : Math.max(0, startReduction - (hasStartJoin ? innerStartExtend : 0));
-
-  const topEndAxis =
-    totalReduction === 0 || topIsPreserved
-      ? baseLength
-      : Math.min(
-        baseLength,
-        baseLength - endReduction + (hasEndJoin ? innerEndExtend : 0)
-      );
-
-  const bottomStartAxis =
-    totalReduction === 0 || !topIsPreserved
-      ? 0
-      : Math.max(0, startReduction - (hasStartJoin ? innerStartExtend : 0));
-
-  const bottomEndAxis =
-    totalReduction === 0 || !topIsPreserved
-      ? baseLength
-      : Math.min(
-        baseLength,
-        baseLength - endReduction + (hasEndJoin ? innerEndExtend : 0)
-      );
-
-  const mainOffset = thickness / 2 + 16;
-
-  const topOffset = +mainOffset;
-  const bottomOffset = -mainOffset;
-
-  let topStartPt = pointOnOffsetTrack({
-    origin: centerA,
-    ux,
-    uy,
-    nx,
-    ny,
-    axisDistance: topStartAxis,
-    normalOffset: topOffset,
+  const topDim = createOffsetDimensionSegmentFromFace({
+    faceStart: topGeomStart,
+    faceEnd: topGeomEnd,
+    wallCenterMid,
+    offset: mainOffset,
   });
 
-  let topEndPt = pointOnOffsetTrack({
-    origin: centerA,
-    ux,
-    uy,
-    nx,
-    ny,
-    axisDistance: topEndAxis,
-    normalOffset: topOffset,
+  const bottomDim = createOffsetDimensionSegmentFromFace({
+    faceStart: bottomGeomStart,
+    faceEnd: bottomGeomEnd,
+    wallCenterMid,
+    offset: mainOffset,
   });
 
-  let bottomStartPt = pointOnOffsetTrack({
-    origin: centerA,
-    ux,
-    uy,
-    nx,
-    ny,
-    axisDistance: bottomStartAxis,
-    normalOffset: bottomOffset,
-  });
+  const topStartPt = topDim.start;
+  const topEndPt = topDim.end;
+  const bottomStartPt = bottomDim.start;
+  const bottomEndPt = bottomDim.end;
 
-  let bottomEndPt = pointOnOffsetTrack({
-    origin: centerA,
-    ux,
-    uy,
-    nx,
-    ny,
-    axisDistance: bottomEndAxis,
-    normalOffset: bottomOffset,
-  });
-
-  if (totalReduction > 0 && hasEndJoin) {
-    if (topIsPreserved) {
-      topEndPt = {
-        x: topGeomEnd.x + nx * (mainOffset - thickness / 2),
-        y: topGeomEnd.y + ny * (mainOffset - thickness / 2),
-      };
-    } else {
-      bottomEndPt = {
-        x: bottomGeomEnd.x - nx * (mainOffset - thickness / 2),
-        y: bottomGeomEnd.y - ny * (mainOffset - thickness / 2),
-      };
-    }
-  }
+  const topDisplayLength = topDim.length;
+  const bottomDisplayLength = bottomDim.length;
 
   const textGap = 56;
   const tickSize = 18;
 
+  const safeTopGap = Math.min(textGap, Math.max(0, topDisplayLength - 16));
+  const safeBottomGap = Math.min(
+    textGap,
+    Math.max(0, bottomDisplayLength - 16)
+  );
+
   const topMid = midpoint(topStartPt, topEndPt);
   const bottomMid = midpoint(bottomStartPt, bottomEndPt);
 
-  const gapHalfX = ux * (textGap / 2);
-  const gapHalfY = uy * (textGap / 2);
+  const topGapHalfX = topDim.ux * (safeTopGap / 2);
+  const topGapHalfY = topDim.uy * (safeTopGap / 2);
 
-  const topGapStart = { x: topMid.x - gapHalfX, y: topMid.y - gapHalfY };
-  const topGapEnd = { x: topMid.x + gapHalfX, y: topMid.y + gapHalfY };
+  const bottomGapHalfX = bottomDim.ux * (safeBottomGap / 2);
+  const bottomGapHalfY = bottomDim.uy * (safeBottomGap / 2);
+
+  const topGapStart = {
+    x: topMid.x - topGapHalfX,
+    y: topMid.y - topGapHalfY,
+  };
+  const topGapEnd = {
+    x: topMid.x + topGapHalfX,
+    y: topMid.y + topGapHalfY,
+  };
 
   const bottomGapStart = {
-    x: bottomMid.x - gapHalfX,
-    y: bottomMid.y - gapHalfY,
+    x: bottomMid.x - bottomGapHalfX,
+    y: bottomMid.y - bottomGapHalfY,
   };
   const bottomGapEnd = {
-    x: bottomMid.x + gapHalfX,
-    y: bottomMid.y + gapHalfY,
+    x: bottomMid.x + bottomGapHalfX,
+    y: bottomMid.y + bottomGapHalfY,
   };
 
   const topLineLeft = createDimensionLine(
@@ -342,17 +305,42 @@ export function createWallDimensions(
     bottomEndPt.y
   );
 
-  const startTopTickPts = makePerpTick(topStartPt, nx, ny, tickSize);
-  const startBottomTickPts = makePerpTick(bottomStartPt, nx, ny, tickSize);
-  const endTopTickPts = makePerpTick(topEndPt, nx, ny, tickSize);
-  const endBottomTickPts = makePerpTick(bottomEndPt, nx, ny, tickSize);
+  const startTopTickPts = makePerpTick(
+    topStartPt,
+    topDim.nx,
+    topDim.ny,
+    tickSize
+  );
+  const startBottomTickPts = makePerpTick(
+    bottomStartPt,
+    bottomDim.nx,
+    bottomDim.ny,
+    tickSize
+  );
+  const endTopTickPts = makePerpTick(topEndPt, topDim.nx, topDim.ny, tickSize);
+  const endBottomTickPts = makePerpTick(
+    bottomEndPt,
+    bottomDim.nx,
+    bottomDim.ny,
+    tickSize
+  );
 
   const hideTopStartTick =
-    totalReduction > 0 && !topIsPreserved && hasStartJoin;
-  const hideTopEndTick = totalReduction > 0 && !topIsPreserved && hasEndJoin;
+    geometricTopLength !== geometricBottomLength &&
+    !topIsPreserved &&
+    hasStartJoin;
+  const hideTopEndTick =
+    geometricTopLength !== geometricBottomLength &&
+    !topIsPreserved &&
+    hasEndJoin;
   const hideBottomStartTick =
-    totalReduction > 0 && topIsPreserved && hasStartJoin;
-  const hideBottomEndTick = totalReduction > 0 && topIsPreserved && hasEndJoin;
+    geometricTopLength !== geometricBottomLength &&
+    topIsPreserved &&
+    hasStartJoin;
+  const hideBottomEndTick =
+    geometricTopLength !== geometricBottomLength &&
+    topIsPreserved &&
+    hasEndJoin;
 
   const startTopTick = hideTopStartTick
     ? createHiddenDimensionLine(topStartPt.x, topStartPt.y)
