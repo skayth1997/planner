@@ -158,7 +158,7 @@ export default forwardRef<
       onChange: () => {
         rebuildDetectedRoomFills();
         gridRef.current?.rebuild();
-        wallSelectionRef.current?.rerenderHandles();
+        wallSelectionRef.current?.rerenderSelectionVisuals();
         safeRender();
       },
     });
@@ -186,7 +186,7 @@ export default forwardRef<
       offsetWallWithConnectedEnds: ({ rootId, dx, dy }) => {
         wallManager.offsetWallWithConnectedEnds({ rootId, dx, dy });
       },
-      rerenderHandles: () => wallSelection.rerenderHandles(),
+      rerenderSelectionVisuals: () => wallSelection.rerenderSelectionVisuals(),
       scheduleRender,
     });
 
@@ -200,13 +200,13 @@ export default forwardRef<
       onCommitSegmentWall: (a, b, thickness) => {
         wallManager.addSegmentWall({ a, b, thickness });
         gridRef.current?.rebuild();
-        wallSelection.rerenderHandles();
+        wallSelection.rerenderSelectionVisuals();
         safeRender();
       },
       onCommitBlockWall: (center, size, thickness) => {
         wallManager.addBlockWall({ center, size, thickness });
         gridRef.current?.rebuild();
-        wallSelection.rerenderHandles();
+        wallSelection.rerenderSelectionVisuals();
         safeRender();
       },
       scheduleRender,

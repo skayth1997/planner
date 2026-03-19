@@ -47,7 +47,7 @@ export function createWallEditController(args: {
     dx: number;
     dy: number;
   }) => void;
-  rerenderHandles: () => void;
+  rerenderSelectionVisuals: () => void;
   scheduleRender?: () => void;
 }) {
   const {
@@ -56,7 +56,7 @@ export function createWallEditController(args: {
     getLinearWalls,
     moveConnectedNode,
     offsetWallWithConnectedEnds,
-    rerenderHandles,
+    rerenderSelectionVisuals,
     scheduleRender,
   } = args;
 
@@ -204,7 +204,7 @@ export function createWallEditController(args: {
           };
         }
 
-        rerenderHandles();
+        rerenderSelectionVisuals();
         renderNow();
       }
 
@@ -231,7 +231,7 @@ export function createWallEditController(args: {
         dragStartPointer = point;
       }
 
-      rerenderHandles();
+      rerenderSelectionVisuals();
       renderNow();
     }
   };
