@@ -15,12 +15,15 @@ export type RoomVisual = {
   wallBand: Path;
 };
 
+export type WallInteractionState = "idle" | "hovered" | "selected";
+
 export type WallStripVisual = {
   band: Polygon;
   sideA: Line;
   sideB: Line;
   startCap: Line | null;
   endCap: Line | null;
+  interactionState: WallInteractionState;
 };
 
 export const WALL_THICKNESS = 10;
@@ -305,6 +308,73 @@ function updateBorderLine(line: Line, a: Pt, b: Pt) {
   line.setCoords();
 }
 
+function getWallStyle(state: WallInteractionState) {
+  switch (state) {
+    case "hovered":
+      return {
+        bandOpacity: 0.9,
+        borderStroke: "#2563eb",
+        borderWidth: 2.2,
+      };
+    case "selected":
+      return {
+        bandOpacity: 1,
+        borderStroke: "#1d4ed8",
+        borderWidth: 2.8,
+      };
+    case "idle":
+    default:
+      return {
+        bandOpacity: 1,
+        borderStroke: "#111827",
+        borderWidth: 1.8,
+      };
+  }
+}
+
+export function applyWallStripInteractionStyle(
+  wall: WallStripVisual,
+  state: WallInteractionState
+) {
+  const style = getWallStyle(state);
+
+  wall.interactionState = state;
+
+  wall.band.set({
+    opacity: style.bandOpacity,
+  });
+
+  wall.sideA.set({
+    stroke: style.borderStroke,
+    strokeWidth: style.borderWidth,
+  });
+
+  wall.sideB.set({
+    stroke: style.borderStroke,
+    strokeWidth: style.borderWidth,
+  });
+
+  if (wall.startCap) {
+    wall.startCap.set({
+      stroke: style.borderStroke,
+      strokeWidth: style.borderWidth,
+    });
+  }
+
+  if (wall.endCap) {
+    wall.endCap.set({
+      stroke: style.borderStroke,
+      strokeWidth: style.borderWidth,
+    });
+  }
+
+  wall.band.setCoords();
+  wall.sideA.setCoords();
+  wall.sideB.setCoords();
+  wall.startCap?.setCoords();
+  wall.endCap?.setCoords();
+}
+
 export function createWallStripVisual(
   a: Pt,
   b: Pt,
@@ -336,6 +406,7 @@ export function createWallStripVisual(
     perPixelTargetFind: false,
     strokeUniform: true,
     excludeFromExport: options?.excludeFromExport ?? false,
+    opacity: 1,
   });
 
   (band as any).data = {
@@ -357,13 +428,18 @@ export function createWallStripVisual(
       ? null
       : createBorderLine(points[1], points[2]);
 
-  return {
+  const visual: WallStripVisual = {
     band,
     sideA,
     sideB,
     startCap,
     endCap,
+    interactionState: "idle",
   };
+
+  applyWallStripInteractionStyle(visual, "idle");
+
+  return visual;
 }
 
 export function updateWallStripVisual(
@@ -426,6 +502,8 @@ export function updateWallStripVisual(
       updateBorderLine(wall.endCap, points[1], points[2]);
     }
   }
+
+  applyWallStripInteractionStyle(wall, wall.interactionState);
 }
 
 export function addWallStripVisualToCanvas(

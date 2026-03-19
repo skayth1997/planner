@@ -12,6 +12,7 @@ import {
 } from "./wall-angle-visual";
 import type { WallAngleVisual } from "./wall-angle-visual";
 import { sameNode } from "./wall-geometry";
+import { applyWallStripInteractionStyle } from "./room-visual";
 
 export function createWallSelectionController(args: {
   canvas: Canvas;
@@ -29,6 +30,7 @@ export function createWallSelectionController(args: {
   } = args;
 
   let selectedWallId: string | null = null;
+  let hoveredWallId: string | null = null;
   let handleVisuals: WallHandleVisuals | null = null;
   let angleVisuals: WallAngleVisual[] = [];
 
@@ -60,6 +62,22 @@ export function createWallSelectionController(args: {
   const clearSelectionVisuals = () => {
     clearHandles();
     clearAngleVisuals();
+  };
+
+  const applyInteractionStyles = () => {
+    for (const wall of getWalls()) {
+      let state: "idle" | "hovered" | "selected" = "idle";
+
+      if (wall.id === hoveredWallId) {
+        state = "hovered";
+      }
+
+      if (wall.id === selectedWallId) {
+        state = "selected";
+      }
+
+      applyWallStripInteractionStyle(wall.visual, state);
+    }
   };
 
   const emitSelection = () => {
@@ -179,12 +197,14 @@ export function createWallSelectionController(args: {
 
     const wall = getSelectedWall();
     if (!wall) {
+      applyInteractionStyles();
       emitSelection();
       renderNow();
       return;
     }
 
     if (!selectionEnabled()) {
+      applyInteractionStyles();
       emitSelection();
       renderNow();
       return;
@@ -199,6 +219,7 @@ export function createWallSelectionController(args: {
     }
 
     createAngleVisualsForSelectedWall();
+    applyInteractionStyles();
     emitSelection();
     renderNow();
   };
@@ -206,6 +227,7 @@ export function createWallSelectionController(args: {
   const clearSelection = () => {
     selectedWallId = null;
     clearSelectionVisuals();
+    applyInteractionStyles();
     emitSelection();
     renderNow();
   };
@@ -215,6 +237,14 @@ export function createWallSelectionController(args: {
 
     selectedWallId = wallId;
     rerenderSelectionVisuals();
+  };
+
+  const setHoveredWallId = (wallId: string | null) => {
+    if (hoveredWallId === wallId) return;
+
+    hoveredWallId = wallId;
+    applyInteractionStyles();
+    renderNow();
   };
 
   const onMouseDown = (opt: any) => {
@@ -238,12 +268,39 @@ export function createWallSelectionController(args: {
     clearSelection();
   };
 
+  const onMouseMove = (opt: any) => {
+    if (!selectionEnabled()) {
+      setHoveredWallId(null);
+      return;
+    }
+
+    const target = opt?.target as any;
+    const kind = target?.data?.kind;
+    const id = target?.data?.id;
+
+    if ((kind === "wall-segment" || kind === "wall-block") && id) {
+      setHoveredWallId(id);
+      return;
+    }
+
+    if (kind === "wall-handle") {
+      return;
+    }
+
+    setHoveredWallId(null);
+  };
+
   const start = () => {
+    applyInteractionStyles();
     canvas.on("mouse:down", onMouseDown);
+    canvas.on("mouse:move", onMouseMove);
   };
 
   const stop = () => {
     canvas.off("mouse:down", onMouseDown);
+    canvas.off("mouse:move", onMouseMove);
+
+    hoveredWallId = null;
     clearSelection();
   };
 
