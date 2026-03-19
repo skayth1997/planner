@@ -37,8 +37,8 @@ export type OpeningData = {
 
 export type SelectedInfo = {
   id: string;
-  kind: "furniture" | "opening" | "room" | "unknown";
-  type: FurnitureType | OpeningType | "room" | "unknown";
+  kind: "furniture" | "opening" | "room" | "wall" | "unknown";
+  type: FurnitureType | OpeningType | "room" | "wall" | "unknown";
   roomId?: RoomId;
   left: number;
   top: number;

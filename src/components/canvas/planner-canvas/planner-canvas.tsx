@@ -20,43 +20,47 @@ import type {
   SelectedInfo,
   FurnitureType,
   RoomSize,
-  Pt,
 } from "./core/planner-types";
 
-import { createRoomDrawController } from "./room/room-draw";
 import { createRenderScheduler } from "./core/render";
 import { attachMouseController } from "./input/mouse-controller";
 import { createGridController } from "./grid/grid-controller";
-
-import {
-  createRoomVisual,
-  updateRoomVisual,
-  removeRoomVisual,
-  addRoomVisualToCanvas,
-} from "./room/room-visual";
-import type { RoomVisual } from "./room/room-visual";
-
 import { fitObjectsToView } from "./core/viewport";
+import { createWallManager } from "./room/wall-manager";
+import { createWallDrawController } from "./room/wall-draw";
+import { createWallSelectionController } from "./room/wall-selection";
+import { createWallEditController } from "./room/wall-edit";
+import { detectRoomsFromWalls } from "./room/room-detection";
+import { rebuildRoomFills } from "./room/room-fill";
+import type { RoomFillVisual } from "./room/room-fill";
 
 type GridController = ReturnType<typeof createGridController>;
+type WallManager = ReturnType<typeof createWallManager>;
 
 export default forwardRef<
   PlannerCanvasHandle,
   { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange: _onSelectionChange }, ref) {
+>(function PlannerCanvas({ onSelectionChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const fabricCanvasRef = useRef<Canvas | null>(null);
-  const roomsRef = useRef<RoomVisual[]>([]);
+  const wallManagerRef = useRef<WallManager | null>(null);
 
   const gridRef = useRef<GridController | null>(null);
-  const drawRoomRef = useRef<ReturnType<
-    typeof createRoomDrawController
+  const wallDrawRef = useRef<ReturnType<
+    typeof createWallDrawController
+  > | null>(null);
+  const wallSelectionRef = useRef<ReturnType<
+    typeof createWallSelectionController
+  > | null>(null);
+  const wallEditRef = useRef<ReturnType<
+    typeof createWallEditController
   > | null>(null);
 
   const scheduleRenderRef = useRef<null | (() => void)>(null);
   const isSpacePressedRef = useRef(false);
+  const roomFillsRef = useRef<RoomFillVisual[]>([]);
 
   const safeRender = () => {
     const canvas = fabricCanvasRef.current;
@@ -66,52 +70,19 @@ export default forwardRef<
     else canvas.requestRenderAll();
   };
 
-  const getLastRoom = () => {
-    const rooms = roomsRef.current;
-    return rooms.length ? rooms[rooms.length - 1] : null;
-  };
-
-  const getRoomSizeInternal = (): RoomSize => {
-    const room = getLastRoom();
-    if (!room) return { width: 0, height: 0 };
-
-    const r = room.outer.getBoundingRect();
-    return {
-      width: Math.round(r.width),
-      height: Math.round(r.height),
-    };
-  };
-
-  const setRoomSizeInternal = (size: RoomSize) => {
+  const rebuildDetectedRoomFills = () => {
     const canvas = fabricCanvasRef.current;
-    const room = getLastRoom();
+    const wallManager = wallManagerRef.current;
+    if (!canvas || !wallManager) return;
 
-    if (!canvas || !room) return;
+    const rooms = detectRoomsFromWalls(wallManager.getLinearWalls());
 
-    const min = 100;
-    const targetW = Math.max(min, Math.round(Number(size.width)));
-    const targetH = Math.max(min, Math.round(Number(size.height)));
-
-    const r = room.outer.getBoundingRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-
-    const left = cx - targetW / 2;
-    const top = cy - targetH / 2;
-
-    const points: Pt[] = [
-      { x: left, y: top },
-      { x: left + targetW, y: top },
-      { x: left + targetW, y: top + targetH },
-      { x: left, y: top + targetH },
-    ];
-
-    removeRoomVisual(canvas, room);
-    updateRoomVisual(room, points);
-    addRoomVisualToCanvas(canvas, room);
-
-    gridRef.current?.rebuild();
-    safeRender();
+    roomFillsRef.current = rebuildRoomFills({
+      canvas,
+      rooms,
+      current: roomFillsRef.current,
+      wallThickness: wallManager.getDefaultThickness(),
+    });
   };
 
   useEffect(() => {
@@ -120,10 +91,53 @@ export default forwardRef<
     const canvas = new Canvas(htmlCanvasRef.current, {
       backgroundColor: "#fafafa",
       selection: false,
+      selectionColor: "transparent",
+      selectionBorderColor: "transparent",
+      selectionLineWidth: 0,
       preserveObjectStacking: true,
     });
 
     fabricCanvasRef.current = canvas;
+
+    const lowerCanvasEl = canvas.lowerCanvasEl as HTMLCanvasElement | undefined;
+    const upperCanvasEl = canvas.upperCanvasEl as HTMLCanvasElement | undefined;
+    const containerEl = containerRef.current;
+
+    const preventDomDefault = (e: Event) => {
+      e.preventDefault();
+    };
+
+    const preventMouseDefault = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    const applyDomGuards = (el: HTMLElement | null | undefined) => {
+      if (!el) return;
+
+      el.setAttribute("draggable", "false");
+      el.style.userSelect = "none";
+      el.style.webkitUserSelect = "none";
+      (el.style as any).msUserSelect = "none";
+      (el.style as any).webkitUserDrag = "none";
+      (el.style as any).webkitTapHighlightColor = "transparent";
+      (el.style as any).touchAction = "none";
+
+      el.addEventListener("dragstart", preventDomDefault);
+      el.addEventListener("selectstart", preventDomDefault);
+      el.addEventListener("mousedown", preventMouseDefault);
+    };
+
+    const removeDomGuards = (el: HTMLElement | null | undefined) => {
+      if (!el) return;
+
+      el.removeEventListener("dragstart", preventDomDefault);
+      el.removeEventListener("selectstart", preventDomDefault);
+      el.removeEventListener("mousedown", preventMouseDefault);
+    };
+
+    applyDomGuards(lowerCanvasEl);
+    applyDomGuards(upperCanvasEl);
+    applyDomGuards(containerEl);
 
     const scheduleRender = createRenderScheduler(canvas);
     scheduleRenderRef.current = scheduleRender;
@@ -139,28 +153,67 @@ export default forwardRef<
 
     gridRef.current = grid;
 
-    drawRoomRef.current = createRoomDrawController({
+    const wallManager = createWallManager({
       canvas,
-      scheduleRender,
-      onFinish: (points) => {
-        if (points.length < 3) return;
-
-        const roomId = `room-${roomsRef.current.length + 1}`;
-        const room = createRoomVisual(points, roomId);
-
-        roomsRef.current.push(room);
-        addRoomVisualToCanvas(canvas, room);
-
+      onChange: () => {
+        rebuildDetectedRoomFills();
         gridRef.current?.rebuild();
-        safeRender();
-      },
-      onCancel: () => {
-        safeRender();
-      },
-      onDrawingChange: () => {
+        wallSelectionRef.current?.rerenderHandles();
         safeRender();
       },
     });
+
+    wallManagerRef.current = wallManager;
+
+    const wallSelection = createWallSelectionController({
+      canvas,
+      getWalls: () => wallManager.getWalls(),
+      isSelectionEnabled: () => !wallDrawRef.current?.isActive(),
+      onSelectionChange,
+      scheduleRender,
+    });
+
+    wallSelectionRef.current = wallSelection;
+    wallSelection.start();
+
+    const wallEdit = createWallEditController({
+      canvas,
+      getSelectedWall: () => wallSelection.getSelectedWall(),
+      getLinearWalls: () => wallManager.getLinearWalls(),
+      moveConnectedNode: ({ rootId, nodeRole, dx, dy }) => {
+        wallManager.moveConnectedNode({ rootId, nodeRole, dx, dy });
+      },
+      offsetWallWithConnectedEnds: ({ rootId, dx, dy }) => {
+        wallManager.offsetWallWithConnectedEnds({ rootId, dx, dy });
+      },
+      rerenderHandles: () => wallSelection.rerenderHandles(),
+      scheduleRender,
+    });
+
+    wallEditRef.current = wallEdit;
+    wallEdit.start();
+
+    const wallDraw = createWallDrawController({
+      canvas,
+      getLinearWalls: () => wallManager.getLinearWalls(),
+      getDefaultThickness: () => wallManager.getDefaultThickness(),
+      onCommitSegmentWall: (a, b, thickness) => {
+        wallManager.addSegmentWall({ a, b, thickness });
+        gridRef.current?.rebuild();
+        wallSelection.rerenderHandles();
+        safeRender();
+      },
+      onCommitBlockWall: (center, size, thickness) => {
+        wallManager.addBlockWall({ center, size, thickness });
+        gridRef.current?.rebuild();
+        wallSelection.rerenderHandles();
+        safeRender();
+      },
+      scheduleRender,
+    });
+
+    wallDrawRef.current = wallDraw;
+    rebuildDetectedRoomFills();
 
     const resizeCanvasToContainer = () => {
       const el = containerRef.current;
@@ -192,7 +245,9 @@ export default forwardRef<
         gridRef.current?.rebuild();
       },
       canDragPan: () => {
-        return !drawRoomRef.current?.isActive();
+        const isDrawing = !!wallDrawRef.current?.isActive();
+        const isEditing = !!wallEditRef.current?.isDragging();
+        return !isDrawing && !isEditing;
       },
     });
 
@@ -202,21 +257,34 @@ export default forwardRef<
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
 
+      removeDomGuards(lowerCanvasEl);
+      removeDomGuards(upperCanvasEl);
+      removeDomGuards(containerEl);
+
       detachMouse();
 
-      drawRoomRef.current?.stop();
-      drawRoomRef.current = null;
+      wallEditRef.current?.stop();
+      wallEditRef.current = null;
+
+      wallSelectionRef.current?.stop();
+      wallSelectionRef.current = null;
+
+      wallDrawRef.current?.stop();
+      wallDrawRef.current = null;
+
+      wallManager.dispose();
+      wallManagerRef.current = null;
 
       grid.dispose();
       gridRef.current = null;
 
+      roomFillsRef.current = [];
       canvas.dispose();
 
-      roomsRef.current = [];
       fabricCanvasRef.current = null;
       scheduleRenderRef.current = null;
     };
-  }, []);
+  }, [onSelectionChange]);
 
   useImperativeHandle(
     ref,
@@ -233,12 +301,13 @@ export default forwardRef<
 
       fitRoom() {
         const canvas = fabricCanvasRef.current;
-        if (!canvas || !roomsRef.current.length) return;
+        const wallManager = wallManagerRef.current;
+        if (!canvas || !wallManager) return;
 
-        fitObjectsToView(
-          canvas,
-          roomsRef.current.map((r) => r.outer)
-        );
+        const objects = wallManager.getFitObjects();
+        if (!objects.length) return;
+
+        fitObjectsToView(canvas, objects);
         safeRender();
       },
 
@@ -255,12 +324,10 @@ export default forwardRef<
       importJsonString() {},
 
       getRoomSize() {
-        return getRoomSizeInternal();
+        return { width: 0, height: 0 };
       },
 
-      setRoomSize(size: RoomSize) {
-        setRoomSizeInternal(size);
-      },
+      setRoomSize(_: RoomSize) {},
 
       setGridVisible(visible: boolean) {
         gridRef.current?.setVisible(visible);
@@ -275,29 +342,22 @@ export default forwardRef<
       addWindow() {},
 
       isDrawingRoom() {
-        return !!drawRoomRef.current?.isActive();
+        return !!wallDrawRef.current?.isActive();
       },
 
       startDrawRoom() {
-        drawRoomRef.current?.start();
+        wallSelectionRef.current?.clearSelection();
+        wallDrawRef.current?.start();
       },
 
       stopDrawRoom() {
-        const controller = drawRoomRef.current;
-        if (!controller) return;
-
-        if (controller.isActive()) {
-          controller.finish();
-        } else {
-          controller.stop();
-        }
+        wallDrawRef.current?.stop();
       },
 
       addRoom() {},
 
       getActiveRoomId() {
-        const room = getLastRoom();
-        return room ? room.id : null;
+        return null;
       },
 
       setActiveRoom() {},
@@ -308,7 +368,8 @@ export default forwardRef<
   return (
     <div
       ref={containerRef}
-      className="relative h-full min-h-0 w-full min-w-0 overflow-hidden border border-neutral-300 bg-white"
+      className="relative h-full min-h-0 w-full min-w-0 overflow-hidden border border-neutral-300 bg-white select-none"
+      style={{ userSelect: "none", WebkitUserSelect: "none" }}
     >
       <canvas ref={htmlCanvasRef} />
     </div>

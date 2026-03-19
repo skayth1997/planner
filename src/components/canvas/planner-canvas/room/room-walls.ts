@@ -19,7 +19,7 @@ export type RoomRuntime = {
   handles: Circle[];
 };
 
-const DEFAULT_WALL_THICKNESS = 20;
+const DEFAULT_WALL_THICKNESS = 10;
 const DEFAULT_HATCH_SPACING = 12;
 
 function snap(v: number, grid: number) {
