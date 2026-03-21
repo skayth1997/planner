@@ -44,6 +44,30 @@ function pointAt(a: Pt, b: Pt, t: number): Pt {
   };
 }
 
+export function projectPointToSegment(point: Pt, a: Pt, b: Pt) {
+  const ab = subtract(b, a);
+  const abLenSq = dot(ab, ab);
+
+  if (abLenSq <= EPS) {
+    return {
+      point: { ...a },
+      t: 0,
+      distance: distanceBetween(point, a),
+    };
+  }
+
+  const ap = subtract(point, a);
+  const rawT = dot(ap, ab) / abLenSq;
+  const t = clamp01(rawT);
+  const projected = pointAt(a, b, t);
+
+  return {
+    point: projected,
+    t,
+    distance: distanceBetween(point, projected),
+  };
+}
+
 type IntersectionHit = {
   t: number;
   point: Pt;

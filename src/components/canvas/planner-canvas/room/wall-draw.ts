@@ -36,6 +36,7 @@ export function createWallDrawController(args: {
   canvas: Canvas;
   getLinearWalls: () => Array<{ id: string; a: Pt; b: Pt; thickness: number }>;
   getDefaultThickness: () => number;
+  splitSegmentWallAtPoint?: (args: { id: string; point: Pt }) => Pt | null;
   onCommitSegmentWall?: (a: Pt, b: Pt, thickness: number) => void;
   onCommitBlockWall?: (center: Pt, size: number, thickness: number) => void;
   scheduleRender?: () => void;
@@ -44,6 +45,7 @@ export function createWallDrawController(args: {
     canvas,
     getLinearWalls,
     getDefaultThickness,
+    splitSegmentWallAtPoint,
     onCommitSegmentWall,
     onCommitBlockWall,
     scheduleRender,
@@ -148,26 +150,37 @@ export function createWallDrawController(args: {
 
     const target = opt?.target as any;
     const targetKind = target?.data?.kind;
+    const targetId = target?.data?.id;
 
-    if (
-      targetKind === "wall-segment" ||
-      targetKind === "wall-block" ||
-      targetKind === "wall-handle"
-    ) {
+    if (targetKind === "wall-handle") {
       return;
     }
 
     const point = getPointerPoint(canvas, opt);
     if (!point) return;
 
+    let startPoint = point;
+
+    if (targetKind === "wall-segment" && targetId && splitSegmentWallAtPoint) {
+      const splitPoint = splitSegmentWallAtPoint({
+        id: targetId,
+        point,
+      });
+
+      if (!splitPoint) return;
+      startPoint = splitPoint;
+    } else if (targetKind === "wall-block") {
+      return;
+    }
+
     isPointerDown = true;
-    dragStart = point;
+    dragStart = startPoint;
     currentMouse = point;
 
     renderWallGuides({
       canvas,
       state: preview,
-      start: point,
+      start: startPoint,
     });
 
     renderWallCursor({

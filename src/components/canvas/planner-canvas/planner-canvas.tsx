@@ -197,6 +197,9 @@ export default forwardRef<
       canvas,
       getLinearWalls: () => wallManager.getLinearWalls(),
       getDefaultThickness: () => wallManager.getDefaultThickness(),
+      splitSegmentWallAtPoint: ({ id, point }) => {
+        return wallManager.splitSegmentWallAtPoint({ id, point });
+      },
       onCommitSegmentWall: (a, b, thickness) => {
         wallManager.addSegmentWall({ a, b, thickness });
         gridRef.current?.rebuild();

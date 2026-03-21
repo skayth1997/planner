@@ -11,7 +11,10 @@ import {
 import type { WallStripVisual } from "./room-visual";
 import {
   clampMovedNodeConnectedWallsAgainstWalls,
+  distanceBetween,
   getWallsConnectedToNode,
+  isLongEnough,
+  projectPointToSegment,
   sameNode,
 } from "./wall-geometry";
 
@@ -19,23 +22,23 @@ export type WallKind = "segment" | "block";
 
 export type WallItem =
   | {
-  id: string;
-  kind: "segment";
-  a: Pt;
-  b: Pt;
-  thickness: number;
-  visual: WallStripVisual;
-  dimensions: WallDimensionVisual;
-}
+      id: string;
+      kind: "segment";
+      a: Pt;
+      b: Pt;
+      thickness: number;
+      visual: WallStripVisual;
+      dimensions: WallDimensionVisual;
+    }
   | {
-  id: string;
-  kind: "block";
-  center: Pt;
-  size: number;
-  thickness: number;
-  visual: WallStripVisual;
-  dimensions: null;
-};
+      id: string;
+      kind: "block";
+      center: Pt;
+      size: number;
+      thickness: number;
+      visual: WallStripVisual;
+      dimensions: null;
+    };
 
 export type WallSegmentLike = {
   id: string;
@@ -170,11 +173,14 @@ export function createWallManager(args: {
     return updated;
   };
 
-  const addSegmentWall = (args: { a: Pt; b: Pt; thickness?: number }) => {
-    const thickness = args.thickness ?? defaultThickness;
+  const createSegmentWallItem = (args: {
+    a: Pt;
+    b: Pt;
+    thickness: number;
+  }): Extract<WallItem, { kind: "segment" }> => {
     const id = `wall-${wallCounter++}`;
 
-    const visual = createWallStripVisual(args.a, args.b, thickness, {
+    const visual = createWallStripVisual(args.a, args.b, args.thickness, {
       kind: "wall-segment",
       selectable: false,
       evented: true,
@@ -191,22 +197,38 @@ export function createWallManager(args: {
 
     addWallStripVisualToCanvas(canvas, visual);
 
-    const dimensions = createWallDimensions(canvas, args.a, args.b, thickness, {
-      showStartThickness: true,
-      showEndThickness: true,
-      startJoinOther: null,
-      endJoinOther: null,
-    });
+    const dimensions = createWallDimensions(
+      canvas,
+      args.a,
+      args.b,
+      args.thickness,
+      {
+        showStartThickness: true,
+        showEndThickness: true,
+        startJoinOther: null,
+        endJoinOther: null,
+      }
+    );
 
-    const wall: WallItem = {
+    return {
       id,
       kind: "segment",
       a: args.a,
       b: args.b,
-      thickness,
+      thickness: args.thickness,
       visual,
       dimensions,
     };
+  };
+
+  const addSegmentWall = (args: { a: Pt; b: Pt; thickness?: number }) => {
+    const thickness = args.thickness ?? defaultThickness;
+
+    const wall = createSegmentWallItem({
+      a: args.a,
+      b: args.b,
+      thickness,
+    });
 
     walls.push(wall);
     refreshAllSegmentWalls();
@@ -490,6 +512,58 @@ export function createWallManager(args: {
     return updated;
   };
 
+  const splitSegmentWallAtPoint = (args: { id: string; point: Pt }) => {
+    const wall = getWallById(args.id);
+    if (!wall || wall.kind !== "segment") return null;
+
+    const projection = projectPointToSegment(args.point, wall.a, wall.b);
+    const splitPoint = projection.point;
+
+    const distToStart = distanceBetween(splitPoint, wall.a);
+    const distToEnd = distanceBetween(splitPoint, wall.b);
+
+    if (distToStart < 12 || sameNode(splitPoint, wall.a)) {
+      return { ...wall.a };
+    }
+
+    if (distToEnd < 12 || sameNode(splitPoint, wall.b)) {
+      return { ...wall.b };
+    }
+
+    if (
+      !isLongEnough(wall.a, splitPoint) ||
+      !isLongEnough(splitPoint, wall.b)
+    ) {
+      return distToStart <= distToEnd ? { ...wall.a } : { ...wall.b };
+    }
+
+    const index = walls.findIndex((item) => item.id === wall.id);
+    if (index === -1) return null;
+
+    removeWallStripVisual(canvas, wall.visual);
+    removeWallDimensions(canvas, wall.dimensions);
+    walls.splice(index, 1);
+
+    const first = createSegmentWallItem({
+      a: { ...wall.a },
+      b: { ...splitPoint },
+      thickness: wall.thickness,
+    });
+
+    const second = createSegmentWallItem({
+      a: { ...splitPoint },
+      b: { ...wall.b },
+      thickness: wall.thickness,
+    });
+
+    walls.splice(index, 0, first, second);
+
+    refreshAllSegmentWalls();
+    onChange?.();
+
+    return { ...splitPoint };
+  };
+
   const removeWall = (id: string) => {
     const index = walls.findIndex((wall) => wall.id === id);
     if (index === -1) return;
@@ -531,6 +605,7 @@ export function createWallManager(args: {
     moveSegmentWall,
     moveConnectedNode,
     offsetWallWithConnectedEnds,
+    splitSegmentWallAtPoint,
     removeWall,
     clear,
     dispose,
