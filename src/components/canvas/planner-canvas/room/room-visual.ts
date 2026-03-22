@@ -152,6 +152,7 @@ function getEndpointLocalJoin(args: {
   otherSelf: Pt;
   neighborOther?: Pt | null;
   thickness: number;
+  connectionCount?: number;
 }) {
   const { node, otherSelf, neighborOther, thickness } = args;
 
@@ -222,6 +223,8 @@ export function buildWallStripPoints(
   options?: {
     startJoinOther?: Pt | null;
     endJoinOther?: Pt | null;
+    startConnectionCount?: number;
+    endConnectionCount?: number;
   }
 ): Pt[] {
   const dir = normalize(sub(b, a));
@@ -241,6 +244,7 @@ export function buildWallStripPoints(
     otherSelf: b,
     neighborOther: options?.startJoinOther ?? null,
     thickness,
+    connectionCount: options?.startConnectionCount ?? 0,
   });
 
   const endJoin = getEndpointLocalJoin({
@@ -248,6 +252,7 @@ export function buildWallStripPoints(
     otherSelf: a,
     neighborOther: options?.endJoinOther ?? null,
     thickness,
+    connectionCount: options?.endConnectionCount ?? 0,
   });
 
   const startGlobalPlus = startJoin.localPlus;
@@ -266,6 +271,8 @@ export function getWallFaceLengths(
   options?: {
     startJoinOther?: Pt | null;
     endJoinOther?: Pt | null;
+    startConnectionCount?: number;
+    endConnectionCount?: number;
   }
 ) {
   const points = buildWallStripPoints(a, b, thickness, options);
@@ -387,6 +394,8 @@ export function createWallStripVisual(
     evented?: boolean;
     startJoinOther?: Pt | null;
     endJoinOther?: Pt | null;
+    startConnectionCount?: number;
+    endConnectionCount?: number;
     showStartCap?: boolean;
     showEndCap?: boolean;
   }
@@ -394,6 +403,8 @@ export function createWallStripVisual(
   const points = buildWallStripPoints(a, b, thickness, {
     startJoinOther: options?.startJoinOther,
     endJoinOther: options?.endJoinOther,
+    startConnectionCount: options?.startConnectionCount,
+    endConnectionCount: options?.endConnectionCount,
   });
 
   const band = new Polygon([], {
@@ -454,6 +465,8 @@ export function updateWallStripVisual(
     evented?: boolean;
     startJoinOther?: Pt | null;
     endJoinOther?: Pt | null;
+    startConnectionCount?: number;
+    endConnectionCount?: number;
     showStartCap?: boolean;
     showEndCap?: boolean;
   }
@@ -461,6 +474,8 @@ export function updateWallStripVisual(
   const points = buildWallStripPoints(a, b, thickness, {
     startJoinOther: options?.startJoinOther,
     endJoinOther: options?.endJoinOther,
+    startConnectionCount: options?.startConnectionCount,
+    endConnectionCount: options?.endConnectionCount,
   });
 
   applyPolygonAbsolutePoints(wall.band, points, {

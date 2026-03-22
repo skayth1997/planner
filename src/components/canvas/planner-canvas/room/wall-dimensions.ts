@@ -169,7 +169,6 @@ function createOffsetDimensionSegmentFromFace(args: {
     nx,
     ny,
     length: len,
-    mid: faceMid,
   };
 }
 
@@ -183,10 +182,15 @@ export function createWallDimensions(
     showEndThickness?: boolean;
     startJoinOther?: Pt | null;
     endJoinOther?: Pt | null;
+    startConnected?: boolean;
+    endConnected?: boolean;
   }
 ): WallDimensionVisual {
   const showStartThickness = options?.showStartThickness ?? true;
   const showEndThickness = options?.showEndThickness ?? true;
+
+  const startConnected = options?.startConnected ?? false;
+  const endConnected = options?.endConnected ?? false;
 
   const dx = centerB.x - centerA.x;
   const dy = centerB.y - centerA.y;
@@ -208,14 +212,6 @@ export function createWallDimensions(
   const bottomGeomStart = stripPoints[3];
   const bottomGeomEnd = stripPoints[2];
 
-  const geometricTopLength = distance(topGeomStart, topGeomEnd);
-  const geometricBottomLength = distance(bottomGeomStart, bottomGeomEnd);
-
-  const hasStartJoin = !!options?.startJoinOther;
-  const hasEndJoin = !!options?.endJoinOther;
-
-  const topIsPreserved = geometricTopLength >= geometricBottomLength;
-
   const wallCenterMid = midpoint(centerA, centerB);
   const mainOffset = 16;
 
@@ -233,13 +229,16 @@ export function createWallDimensions(
     offset: mainOffset,
   });
 
+  // Important:
+  // Connected ends must still use the real wall-face endpoints.
+  // We hide only ticks, not trim the main dimension line.
   const topStartPt = topDim.start;
   const topEndPt = topDim.end;
   const bottomStartPt = bottomDim.start;
   const bottomEndPt = bottomDim.end;
 
-  const topDisplayLength = topDim.length;
-  const bottomDisplayLength = bottomDim.length;
+  const topDisplayLength = distance(topStartPt, topEndPt);
+  const bottomDisplayLength = distance(bottomStartPt, bottomEndPt);
 
   const textGap = 56;
   const tickSize = 18;
@@ -325,24 +324,7 @@ export function createWallDimensions(
     tickSize
   );
 
-  const hideTopStartTick =
-    geometricTopLength !== geometricBottomLength &&
-    !topIsPreserved &&
-    hasStartJoin;
-  const hideTopEndTick =
-    geometricTopLength !== geometricBottomLength &&
-    !topIsPreserved &&
-    hasEndJoin;
-  const hideBottomStartTick =
-    geometricTopLength !== geometricBottomLength &&
-    topIsPreserved &&
-    hasStartJoin;
-  const hideBottomEndTick =
-    geometricTopLength !== geometricBottomLength &&
-    topIsPreserved &&
-    hasEndJoin;
-
-  const startTopTick = hideTopStartTick
+  const startTopTick = startConnected
     ? createHiddenDimensionLine(topStartPt.x, topStartPt.y)
     : createDimensionLine(
         startTopTickPts.a.x,
@@ -351,7 +333,7 @@ export function createWallDimensions(
         startTopTickPts.b.y
       );
 
-  const startBottomTick = hideBottomStartTick
+  const startBottomTick = startConnected
     ? createHiddenDimensionLine(bottomStartPt.x, bottomStartPt.y)
     : createDimensionLine(
         startBottomTickPts.a.x,
@@ -360,7 +342,7 @@ export function createWallDimensions(
         startBottomTickPts.b.y
       );
 
-  const endTopTick = hideTopEndTick
+  const endTopTick = endConnected
     ? createHiddenDimensionLine(topEndPt.x, topEndPt.y)
     : createDimensionLine(
         endTopTickPts.a.x,
@@ -369,7 +351,7 @@ export function createWallDimensions(
         endTopTickPts.b.y
       );
 
-  const endBottomTick = hideBottomEndTick
+  const endBottomTick = endConnected
     ? createHiddenDimensionLine(bottomEndPt.x, bottomEndPt.y)
     : createDimensionLine(
         endBottomTickPts.a.x,

@@ -47,6 +47,8 @@ export type WallSegmentLike = {
   thickness: number;
 };
 
+type SegmentWall = Extract<WallItem, { kind: "segment" }>;
+
 export function createWallManager(args: {
   canvas: Canvas;
   onChange?: () => void;
@@ -72,9 +74,7 @@ export function createWallManager(args: {
 
   const getLinearWalls = (): WallSegmentLike[] => {
     return walls
-      .filter((wall): wall is Extract<WallItem, { kind: "segment" }> => {
-        return wall.kind === "segment";
-      })
+      .filter((wall): wall is SegmentWall => wall.kind === "segment")
       .map((wall) => ({
         id: wall.id,
         a: wall.a,
@@ -85,55 +85,31 @@ export function createWallManager(args: {
 
   const getFitObjects = () => walls.map((wall) => wall.visual.band);
 
-  const getConnectedEndpointVisibility = (
-    wall: Extract<WallItem, { kind: "segment" }>
-  ) => {
+  const getConnectedNeighborsAtNode = (wall: SegmentWall, node: Pt) => {
     const linearWalls = getLinearWalls().filter((item) => item.id !== wall.id);
 
-    const startConnected = linearWalls.some(
-      (item) => sameNode(item.a, wall.a) || sameNode(item.b, wall.a)
-    );
+    return linearWalls
+      .filter((item) => sameNode(item.a, node) || sameNode(item.b, node))
+      .map((item) => ({
+        id: item.id,
+        other: sameNode(item.a, node) ? item.b : item.a,
+      }));
+  };
 
-    const endConnected = linearWalls.some(
-      (item) => sameNode(item.a, wall.b) || sameNode(item.b, wall.b)
-    );
+  const getJoinData = (wall: SegmentWall) => {
+    const startNeighbors = getConnectedNeighborsAtNode(wall, wall.a);
+    const endNeighbors = getConnectedNeighborsAtNode(wall, wall.b);
 
     return {
-      showStartThickness: !startConnected,
-      showEndThickness: !endConnected,
+      startJoinOther:
+        startNeighbors.length === 1 ? startNeighbors[0].other : null,
+      endJoinOther: endNeighbors.length === 1 ? endNeighbors[0].other : null,
+      startConnectionCount: startNeighbors.length,
+      endConnectionCount: endNeighbors.length,
     };
   };
 
-  const getSingleJoinNeighborOtherPoint = (
-    wall: Extract<WallItem, { kind: "segment" }>,
-    node: Pt
-  ): Pt | null => {
-    const linearWalls = getLinearWalls().filter((item) => item.id !== wall.id);
-
-    const connected = linearWalls.filter(
-      (item) => sameNode(item.a, node) || sameNode(item.b, node)
-    );
-
-    if (connected.length !== 1) return null;
-
-    const neighbor = connected[0];
-    return sameNode(neighbor.a, node) ? neighbor.b : neighbor.a;
-  };
-
-  const getJoinData = (wall: Extract<WallItem, { kind: "segment" }>) => {
-    const startJoinOther = getSingleJoinNeighborOtherPoint(wall, wall.a);
-    const endJoinOther = getSingleJoinNeighborOtherPoint(wall, wall.b);
-
-    return {
-      startJoinOther,
-      endJoinOther,
-    };
-  };
-
-  const refreshSegmentWallGraphics = (
-    wall: Extract<WallItem, { kind: "segment" }>
-  ) => {
-    const visibility = getConnectedEndpointVisibility(wall);
+  const refreshSegmentWallGraphics = (wall: SegmentWall) => {
     const joinData = getJoinData(wall);
 
     updateWallStripVisual(wall.visual, wall.a, wall.b, wall.thickness, {
@@ -141,8 +117,10 @@ export function createWallManager(args: {
       evented: true,
       startJoinOther: joinData.startJoinOther,
       endJoinOther: joinData.endJoinOther,
-      showStartCap: visibility.showStartThickness,
-      showEndCap: visibility.showEndThickness,
+      startConnectionCount: joinData.startConnectionCount,
+      endConnectionCount: joinData.endConnectionCount,
+      showStartCap: joinData.startConnectionCount === 0,
+      showEndCap: joinData.endConnectionCount === 0,
     });
 
     removeWallDimensions(canvas, wall.dimensions);
@@ -153,9 +131,12 @@ export function createWallManager(args: {
       wall.b,
       wall.thickness,
       {
-        ...visibility,
+        showStartThickness: joinData.startConnectionCount === 0,
+        showEndThickness: joinData.endConnectionCount === 0,
         startJoinOther: joinData.startJoinOther,
         endJoinOther: joinData.endJoinOther,
+        startConnected: joinData.startConnectionCount > 0,
+        endConnected: joinData.endConnectionCount > 0,
       }
     );
   };
@@ -177,7 +158,7 @@ export function createWallManager(args: {
     a: Pt;
     b: Pt;
     thickness: number;
-  }): Extract<WallItem, { kind: "segment" }> => {
+  }): SegmentWall => {
     const id = `wall-${wallCounter++}`;
 
     const visual = createWallStripVisual(args.a, args.b, args.thickness, {
@@ -186,6 +167,8 @@ export function createWallManager(args: {
       evented: true,
       startJoinOther: null,
       endJoinOther: null,
+      startConnectionCount: 0,
+      endConnectionCount: 0,
       showStartCap: true,
       showEndCap: true,
     });
@@ -207,6 +190,8 @@ export function createWallManager(args: {
         showEndThickness: true,
         startJoinOther: null,
         endJoinOther: null,
+        startConnected: false,
+        endConnected: false,
       }
     );
 
@@ -222,12 +207,6 @@ export function createWallManager(args: {
   };
 
   const addSegmentWall = (args: { a: Pt; b: Pt; thickness?: number }) => {
-    console.log("[addSegmentWall]", {
-      a: args.a,
-      b: args.b,
-      thickness: args.thickness ?? defaultThickness,
-    });
-
     const thickness = args.thickness ?? defaultThickness;
 
     const wall = createSegmentWallItem({
@@ -525,28 +504,14 @@ export function createWallManager(args: {
     const projection = projectPointToSegment(args.point, wall.a, wall.b);
     const splitPoint = projection.point;
 
-    console.log("[splitSegmentWallAtPoint:input]", {
-      wallId: args.id,
-      clickPoint: args.point,
-      splitPoint,
-      wallA: wall.a,
-      wallB: wall.b,
-    });
-
     const distToStart = distanceBetween(splitPoint, wall.a);
     const distToEnd = distanceBetween(splitPoint, wall.b);
 
     if (distToStart < 12 || sameNode(splitPoint, wall.a)) {
-      console.log("[splitSegmentWallAtPoint:return-start]", {
-        returned: wall.a,
-      });
       return { ...wall.a };
     }
 
     if (distToEnd < 12 || sameNode(splitPoint, wall.b)) {
-      console.log("[splitSegmentWallAtPoint:return-end]", {
-        returned: wall.b,
-      });
       return { ...wall.b };
     }
 
@@ -554,13 +519,7 @@ export function createWallManager(args: {
       !isLongEnough(wall.a, splitPoint) ||
       !isLongEnough(splitPoint, wall.b)
     ) {
-      const fallback = distToStart <= distToEnd ? { ...wall.a } : { ...wall.b };
-
-      console.log("[splitSegmentWallAtPoint:return-fallback]", {
-        returned: fallback,
-      });
-
-      return fallback;
+      return distToStart <= distToEnd ? { ...wall.a } : { ...wall.b };
     }
 
     const index = walls.findIndex((item) => item.id === wall.id);
@@ -586,26 +545,6 @@ export function createWallManager(args: {
 
     refreshAllSegmentWalls();
     onChange?.();
-
-    console.log("[splitSegmentWallAtPoint:created]", {
-      originalWallId: wall.id,
-      firstWall: { id: first.id, a: first.a, b: first.b },
-      secondWall: { id: second.id, a: second.a, b: second.b },
-      returned: splitPoint,
-    });
-
-    const connectedAtSplit = getLinearWalls().filter(
-      (item) => sameNode(item.a, splitPoint) || sameNode(item.b, splitPoint)
-    );
-
-    console.log("[splitSegmentWallAtPoint:connectedAtSplit]", {
-      splitPoint,
-      connectedWalls: connectedAtSplit.map((w) => ({
-        id: w.id,
-        a: w.a,
-        b: w.b,
-      })),
-    });
 
     return { ...splitPoint };
   };
