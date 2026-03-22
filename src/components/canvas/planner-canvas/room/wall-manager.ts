@@ -222,6 +222,12 @@ export function createWallManager(args: {
   };
 
   const addSegmentWall = (args: { a: Pt; b: Pt; thickness?: number }) => {
+    console.log("[addSegmentWall]", {
+      a: args.a,
+      b: args.b,
+      thickness: args.thickness ?? defaultThickness,
+    });
+
     const thickness = args.thickness ?? defaultThickness;
 
     const wall = createSegmentWallItem({
@@ -519,14 +525,28 @@ export function createWallManager(args: {
     const projection = projectPointToSegment(args.point, wall.a, wall.b);
     const splitPoint = projection.point;
 
+    console.log("[splitSegmentWallAtPoint:input]", {
+      wallId: args.id,
+      clickPoint: args.point,
+      splitPoint,
+      wallA: wall.a,
+      wallB: wall.b,
+    });
+
     const distToStart = distanceBetween(splitPoint, wall.a);
     const distToEnd = distanceBetween(splitPoint, wall.b);
 
     if (distToStart < 12 || sameNode(splitPoint, wall.a)) {
+      console.log("[splitSegmentWallAtPoint:return-start]", {
+        returned: wall.a,
+      });
       return { ...wall.a };
     }
 
     if (distToEnd < 12 || sameNode(splitPoint, wall.b)) {
+      console.log("[splitSegmentWallAtPoint:return-end]", {
+        returned: wall.b,
+      });
       return { ...wall.b };
     }
 
@@ -534,7 +554,13 @@ export function createWallManager(args: {
       !isLongEnough(wall.a, splitPoint) ||
       !isLongEnough(splitPoint, wall.b)
     ) {
-      return distToStart <= distToEnd ? { ...wall.a } : { ...wall.b };
+      const fallback = distToStart <= distToEnd ? { ...wall.a } : { ...wall.b };
+
+      console.log("[splitSegmentWallAtPoint:return-fallback]", {
+        returned: fallback,
+      });
+
+      return fallback;
     }
 
     const index = walls.findIndex((item) => item.id === wall.id);
@@ -560,6 +586,26 @@ export function createWallManager(args: {
 
     refreshAllSegmentWalls();
     onChange?.();
+
+    console.log("[splitSegmentWallAtPoint:created]", {
+      originalWallId: wall.id,
+      firstWall: { id: first.id, a: first.a, b: first.b },
+      secondWall: { id: second.id, a: second.a, b: second.b },
+      returned: splitPoint,
+    });
+
+    const connectedAtSplit = getLinearWalls().filter(
+      (item) => sameNode(item.a, splitPoint) || sameNode(item.b, splitPoint)
+    );
+
+    console.log("[splitSegmentWallAtPoint:connectedAtSplit]", {
+      splitPoint,
+      connectedWalls: connectedAtSplit.map((w) => ({
+        id: w.id,
+        a: w.a,
+        b: w.b,
+      })),
+    });
 
     return { ...splitPoint };
   };

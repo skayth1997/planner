@@ -5,6 +5,7 @@ import {
   distanceBetween,
   isLongEnough,
   MIN_WALL_LENGTH,
+  projectPointToSegment,
   snapPointToWallEndpoint,
 } from "./wall-geometry";
 import {
@@ -14,6 +15,13 @@ import {
   renderWallCursor,
   renderWallGuides,
 } from "./wall-preview";
+
+type LinearWallRef = {
+  id: string;
+  a: Pt;
+  b: Pt;
+  thickness: number;
+};
 
 function getPointerPoint(canvas: Canvas, opt: any): Pt | null {
   const p = opt?.absolutePointer ?? opt?.pointer ?? opt?.scenePoint ?? null;
@@ -34,7 +42,7 @@ function getPointerPoint(canvas: Canvas, opt: any): Pt | null {
 
 export function createWallDrawController(args: {
   canvas: Canvas;
-  getLinearWalls: () => Array<{ id: string; a: Pt; b: Pt; thickness: number }>;
+  getLinearWalls: () => LinearWallRef[];
   getDefaultThickness: () => number;
   splitSegmentWallAtPoint?: (args: { id: string; point: Pt }) => Pt | null;
   onCommitSegmentWall?: (a: Pt, b: Pt, thickness: number) => void;
@@ -62,10 +70,40 @@ export function createWallDrawController(args: {
     scheduleRender?.() ?? canvas.requestRenderAll();
   };
 
-  const getSnappedEndPoint = (end: Pt) => {
+  const findWallAtPoint = (
+    point: Pt,
+    options?: {
+      ignoreWallIds?: string[];
+      tolerance?: number;
+    }
+  ) => {
+    const ignoreWallIds = new Set(options?.ignoreWallIds ?? []);
+    const tolerance = options?.tolerance ?? 12;
+
+    let best: { wall: LinearWallRef; distance: number } | null = null;
+
+    for (const wall of getLinearWalls()) {
+      if (ignoreWallIds.has(wall.id)) continue;
+
+      const projection = projectPointToSegment(point, wall.a, wall.b);
+      if (projection.distance > tolerance) continue;
+
+      if (!best || projection.distance < best.distance) {
+        best = {
+          wall,
+          distance: projection.distance,
+        };
+      }
+    }
+
+    return best?.wall ?? null;
+  };
+
+  const getSnappedEndPoint = (end: Pt, ignoreWallIds?: string[]) => {
     return snapPointToWallEndpoint({
       point: end,
       walls: getLinearWalls(),
+      ignoreWallIds,
     });
   };
 
@@ -103,24 +141,69 @@ export function createWallDrawController(args: {
     return analysis;
   };
 
-  const commitCurrentWall = (rawEnd: Pt) => {
+  const resolveStartPoint = (point: Pt, target: any): Pt | null => {
+    const targetKind = target?.data?.kind;
+    const targetId = target?.data?.id;
+
+    if (targetKind === "wall-block") {
+      return null;
+    }
+
+    if (targetKind === "wall-segment" && targetId && splitSegmentWallAtPoint) {
+      return splitSegmentWallAtPoint({
+        id: targetId,
+        point,
+      });
+    }
+
+    return point;
+  };
+
+  const resolveEndPoint = (point: Pt, startPoint: Pt): Pt => {
+    const touchedWall = findWallAtPoint(point, {
+      tolerance: 12,
+    });
+
+    if (!touchedWall || !splitSegmentWallAtPoint) {
+      const snappedEnd = getSnappedEndPoint(point);
+
+      const analysis = analyzeWallCandidate({
+        start: startPoint,
+        end: snappedEnd,
+        walls: getLinearWalls(),
+      });
+
+      return analysis.validEnd ?? snappedEnd;
+    }
+
+    const splitPoint = splitSegmentWallAtPoint({
+      id: touchedWall.id,
+      point,
+    });
+
+    const candidateEnd = splitPoint ?? point;
+    const snappedEnd = getSnappedEndPoint(candidateEnd, [touchedWall.id]);
+
+    const analysis = analyzeWallCandidate({
+      start: startPoint,
+      end: snappedEnd,
+      walls: getLinearWalls(),
+      ignoreWallId: touchedWall.id,
+    });
+
+    return analysis.validEnd ?? snappedEnd;
+  };
+
+  const commitCurrentWall = (resolvedEnd: Pt) => {
     if (!dragStart) return;
 
     const thickness = getDefaultThickness();
-    const snappedEnd = getSnappedEndPoint(rawEnd);
-
-    const analysis = analyzeWallCandidate({
-      start: dragStart,
-      end: snappedEnd,
-      walls: getLinearWalls(),
-    });
 
     if (
-      analysis.validEnd &&
-      distanceBetween(dragStart, analysis.validEnd) >= MIN_WALL_LENGTH &&
-      isLongEnough(dragStart, analysis.validEnd)
+      distanceBetween(dragStart, resolvedEnd) >= MIN_WALL_LENGTH &&
+      isLongEnough(dragStart, resolvedEnd)
     ) {
-      onCommitSegmentWall?.(dragStart, analysis.validEnd, thickness);
+      onCommitSegmentWall?.(dragStart, resolvedEnd, thickness);
     }
   };
 
@@ -142,6 +225,7 @@ export function createWallDrawController(args: {
       state: preview,
       point,
     });
+
     renderNow();
   };
 
@@ -150,7 +234,6 @@ export function createWallDrawController(args: {
 
     const target = opt?.target as any;
     const targetKind = target?.data?.kind;
-    const targetId = target?.data?.id;
 
     if (targetKind === "wall-handle") {
       return;
@@ -159,19 +242,8 @@ export function createWallDrawController(args: {
     const point = getPointerPoint(canvas, opt);
     if (!point) return;
 
-    let startPoint = point;
-
-    if (targetKind === "wall-segment" && targetId && splitSegmentWallAtPoint) {
-      const splitPoint = splitSegmentWallAtPoint({
-        id: targetId,
-        point,
-      });
-
-      if (!splitPoint) return;
-      startPoint = splitPoint;
-    } else if (targetKind === "wall-block") {
-      return;
-    }
+    const startPoint = resolveStartPoint(point, target);
+    if (!startPoint) return;
 
     isPointerDown = true;
     dragStart = startPoint;
@@ -196,8 +268,9 @@ export function createWallDrawController(args: {
     if (!toolActive || !isPointerDown || !dragStart) return;
 
     const point = getPointerPoint(canvas, opt) ?? currentMouse ?? dragStart;
+    const resolvedEnd = resolveEndPoint(point, dragStart);
 
-    commitCurrentWall(point);
+    commitCurrentWall(resolvedEnd);
 
     isPointerDown = false;
     dragStart = null;
