@@ -84,9 +84,9 @@ function createWallPatternFill() {
 
   return patternSource
     ? new Pattern({
-        source: patternSource,
-        repeat: "repeat",
-      })
+      source: patternSource,
+      repeat: "repeat",
+    })
     : "#f4f2ec";
 }
 
@@ -119,6 +119,10 @@ function cross(a: Pt, b: Pt) {
   return a.x * b.y - a.y * b.x;
 }
 
+function dot(a: Pt, b: Pt) {
+  return a.x * b.x + a.y * b.y;
+}
+
 function length(v: Pt) {
   return Math.hypot(v.x, v.y);
 }
@@ -147,14 +151,84 @@ function isReasonableJoin(node: Pt, pt: Pt, thickness: number) {
   return length(sub(pt, node)) <= thickness * 6;
 }
 
+function isSameDirection(a: Pt, b: Pt, tolerance = 0.999) {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (!na || !nb) return false;
+
+  return Math.abs(dot(na, nb)) >= tolerance;
+}
+
+/**
+ * True T-branch join:
+ * both branch sides must stop on the SAME host face.
+ * That prevents one side from behaving like a closed corner.
+ */
+function buildTBranchJoin(args: {
+  node: Pt;
+  dirSelf: Pt;
+  thickness: number;
+  hostDir: Pt;
+}) {
+  const { node, dirSelf, thickness, hostDir } = args;
+
+  const half = thickness / 2;
+
+  const nSelf = leftNormal(dirSelf);
+  const selfPlusBase = add(node, mul(nSelf, half));
+  const selfMinusBase = add(node, mul(nSelf, -half));
+
+  const hostDirNorm = normalize(hostDir);
+  if (!hostDirNorm) {
+    return {
+      localPlus: selfPlusBase,
+      localMinus: selfMinusBase,
+    };
+  }
+
+  let hostFaceNormal = leftNormal(hostDirNorm);
+
+  /**
+   * Pick ONE host face:
+   * the face that lies in the same general direction as the branch growth.
+   * This keeps the branch shape symmetric and truly "T".
+   */
+  if (dot(hostFaceNormal, dirSelf) < 0) {
+    hostFaceNormal = mul(hostFaceNormal, -1);
+  }
+
+  const hostFaceBase = add(node, mul(hostFaceNormal, half));
+
+  const joinedPlus =
+    lineIntersection(selfPlusBase, dirSelf, hostFaceBase, hostDirNorm) ??
+    selfPlusBase;
+
+  const joinedMinus =
+    lineIntersection(selfMinusBase, dirSelf, hostFaceBase, hostDirNorm) ??
+    selfMinusBase;
+
+  return {
+    localPlus: joinedPlus,
+    localMinus: joinedMinus,
+  };
+}
+
 function getEndpointLocalJoin(args: {
   node: Pt;
   otherSelf: Pt;
   neighborOther?: Pt | null;
   thickness: number;
   connectionCount?: number;
+  tJoinHostOther?: Pt | null;
 }) {
-  const { node, otherSelf, neighborOther, thickness } = args;
+  const {
+    node,
+    otherSelf,
+    neighborOther,
+    thickness,
+    connectionCount = 0,
+    tJoinHostOther,
+  } = args;
 
   const dirSelf = normalize(sub(otherSelf, node));
   if (!dirSelf) {
@@ -170,6 +244,32 @@ function getEndpointLocalJoin(args: {
 
   const selfPlusBase = add(node, mul(nSelf, half));
   const selfMinusBase = add(node, mul(nSelf, -half));
+
+  /**
+   * T-junction / cross node:
+   * use one host face for both branch edges
+   */
+  if (connectionCount >= 2 && tJoinHostOther) {
+    const hostDir = normalize(sub(tJoinHostOther, node));
+
+    if (hostDir && !isSameDirection(dirSelf, hostDir)) {
+      const tJoin = buildTBranchJoin({
+        node,
+        dirSelf,
+        thickness,
+        hostDir,
+      });
+
+      return {
+        localPlus: isReasonableJoin(node, tJoin.localPlus, thickness)
+          ? tJoin.localPlus
+          : selfPlusBase,
+        localMinus: isReasonableJoin(node, tJoin.localMinus, thickness)
+          ? tJoin.localMinus
+          : selfMinusBase,
+      };
+    }
+  }
 
   if (!neighborOther) {
     return {
@@ -225,6 +325,8 @@ export function buildWallStripPoints(
     endJoinOther?: Pt | null;
     startConnectionCount?: number;
     endConnectionCount?: number;
+    startTJoinHostOther?: Pt | null;
+    endTJoinHostOther?: Pt | null;
   }
 ): Pt[] {
   const dir = normalize(sub(b, a));
@@ -245,6 +347,7 @@ export function buildWallStripPoints(
     neighborOther: options?.startJoinOther ?? null,
     thickness,
     connectionCount: options?.startConnectionCount ?? 0,
+    tJoinHostOther: options?.startTJoinHostOther ?? null,
   });
 
   const endJoin = getEndpointLocalJoin({
@@ -253,6 +356,7 @@ export function buildWallStripPoints(
     neighborOther: options?.endJoinOther ?? null,
     thickness,
     connectionCount: options?.endConnectionCount ?? 0,
+    tJoinHostOther: options?.endTJoinHostOther ?? null,
   });
 
   const startGlobalPlus = startJoin.localPlus;
@@ -273,6 +377,8 @@ export function getWallFaceLengths(
     endJoinOther?: Pt | null;
     startConnectionCount?: number;
     endConnectionCount?: number;
+    startTJoinHostOther?: Pt | null;
+    endTJoinHostOther?: Pt | null;
   }
 ) {
   const points = buildWallStripPoints(a, b, thickness, options);
@@ -396,6 +502,8 @@ export function createWallStripVisual(
     endJoinOther?: Pt | null;
     startConnectionCount?: number;
     endConnectionCount?: number;
+    startTJoinHostOther?: Pt | null;
+    endTJoinHostOther?: Pt | null;
     showStartCap?: boolean;
     showEndCap?: boolean;
   }
@@ -405,6 +513,8 @@ export function createWallStripVisual(
     endJoinOther: options?.endJoinOther,
     startConnectionCount: options?.startConnectionCount,
     endConnectionCount: options?.endConnectionCount,
+    startTJoinHostOther: options?.startTJoinHostOther,
+    endTJoinHostOther: options?.endTJoinHostOther,
   });
 
   const band = new Polygon([], {
@@ -467,6 +577,8 @@ export function updateWallStripVisual(
     endJoinOther?: Pt | null;
     startConnectionCount?: number;
     endConnectionCount?: number;
+    startTJoinHostOther?: Pt | null;
+    endTJoinHostOther?: Pt | null;
     showStartCap?: boolean;
     showEndCap?: boolean;
   }
@@ -476,6 +588,8 @@ export function updateWallStripVisual(
     endJoinOther: options?.endJoinOther,
     startConnectionCount: options?.startConnectionCount,
     endConnectionCount: options?.endConnectionCount,
+    startTJoinHostOther: options?.startTJoinHostOther,
+    endTJoinHostOther: options?.endTJoinHostOther,
   });
 
   applyPolygonAbsolutePoints(wall.band, points, {

@@ -49,6 +49,112 @@ export type WallSegmentLike = {
 
 type SegmentWall = Extract<WallItem, { kind: "segment" }>;
 
+type ConnectedNeighbor = {
+  id: string;
+  other: Pt;
+};
+
+type JoinEndpointData = {
+  joinOther: Pt | null;
+  tJoinHostOther: Pt | null;
+  connectionCount: number;
+};
+
+function sub(a: Pt, b: Pt): Pt {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+function dot(a: Pt, b: Pt) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function length(v: Pt) {
+  return Math.hypot(v.x, v.y);
+}
+
+function normalize(v: Pt): Pt | null {
+  const len = length(v);
+  if (len < 0.0001) return null;
+  return { x: v.x / len, y: v.y / len };
+}
+
+function isCollinearDirection(a: Pt, b: Pt, tolerance = 0.999) {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (!na || !nb) return false;
+
+  return Math.abs(dot(na, nb)) >= tolerance;
+}
+
+function analyzeEndpointJoin(args: {
+  node: Pt;
+  otherSelf: Pt;
+  neighbors: ConnectedNeighbor[];
+}): JoinEndpointData {
+  const { node, otherSelf, neighbors } = args;
+
+  if (!neighbors.length) {
+    return {
+      joinOther: null,
+      tJoinHostOther: null,
+      connectionCount: 0,
+    };
+  }
+
+  if (neighbors.length === 1) {
+    return {
+      joinOther: neighbors[0].other,
+      tJoinHostOther: null,
+      connectionCount: 1,
+    };
+  }
+
+  const selfDir = normalize(sub(otherSelf, node));
+  if (!selfDir) {
+    return {
+      joinOther: null,
+      tJoinHostOther: null,
+      connectionCount: neighbors.length,
+    };
+  }
+
+  const collinearNeighbors: ConnectedNeighbor[] = [];
+  const perpendicularNeighbors: ConnectedNeighbor[] = [];
+
+  for (const neighbor of neighbors) {
+    const neighborDir = normalize(sub(neighbor.other, node));
+    if (!neighborDir) continue;
+
+    if (isCollinearDirection(selfDir, neighborDir)) {
+      collinearNeighbors.push(neighbor);
+    } else {
+      perpendicularNeighbors.push(neighbor);
+    }
+  }
+
+  if (collinearNeighbors.length >= 1 && perpendicularNeighbors.length >= 1) {
+    return {
+      joinOther: perpendicularNeighbors[0].other,
+      tJoinHostOther: null,
+      connectionCount: neighbors.length,
+    };
+  }
+
+  if (collinearNeighbors.length === 0 && perpendicularNeighbors.length >= 2) {
+    return {
+      joinOther: null,
+      tJoinHostOther: perpendicularNeighbors[0].other,
+      connectionCount: neighbors.length,
+    };
+  }
+
+  return {
+    joinOther: perpendicularNeighbors[0]?.other ?? neighbors[0]?.other ?? null,
+    tJoinHostOther: null,
+    connectionCount: neighbors.length,
+  };
+}
+
 export function createWallManager(args: {
   canvas: Canvas;
   onChange?: () => void;
@@ -100,12 +206,25 @@ export function createWallManager(args: {
     const startNeighbors = getConnectedNeighborsAtNode(wall, wall.a);
     const endNeighbors = getConnectedNeighborsAtNode(wall, wall.b);
 
+    const start = analyzeEndpointJoin({
+      node: wall.a,
+      otherSelf: wall.b,
+      neighbors: startNeighbors,
+    });
+
+    const end = analyzeEndpointJoin({
+      node: wall.b,
+      otherSelf: wall.a,
+      neighbors: endNeighbors,
+    });
+
     return {
-      startJoinOther:
-        startNeighbors.length === 1 ? startNeighbors[0].other : null,
-      endJoinOther: endNeighbors.length === 1 ? endNeighbors[0].other : null,
-      startConnectionCount: startNeighbors.length,
-      endConnectionCount: endNeighbors.length,
+      startJoinOther: start.joinOther,
+      endJoinOther: end.joinOther,
+      startTJoinHostOther: start.tJoinHostOther,
+      endTJoinHostOther: end.tJoinHostOther,
+      startConnectionCount: start.connectionCount,
+      endConnectionCount: end.connectionCount,
     };
   };
 
@@ -119,6 +238,8 @@ export function createWallManager(args: {
       endJoinOther: joinData.endJoinOther,
       startConnectionCount: joinData.startConnectionCount,
       endConnectionCount: joinData.endConnectionCount,
+      startTJoinHostOther: joinData.startTJoinHostOther,
+      endTJoinHostOther: joinData.endTJoinHostOther,
       showStartCap: joinData.startConnectionCount === 0,
       showEndCap: joinData.endConnectionCount === 0,
     });
@@ -137,6 +258,10 @@ export function createWallManager(args: {
         endJoinOther: joinData.endJoinOther,
         startConnected: joinData.startConnectionCount > 0,
         endConnected: joinData.endConnectionCount > 0,
+        startConnectionCount: joinData.startConnectionCount,
+        endConnectionCount: joinData.endConnectionCount,
+        startTJoinHostOther: joinData.startTJoinHostOther,
+        endTJoinHostOther: joinData.endTJoinHostOther,
       }
     );
   };
@@ -169,6 +294,8 @@ export function createWallManager(args: {
       endJoinOther: null,
       startConnectionCount: 0,
       endConnectionCount: 0,
+      startTJoinHostOther: null,
+      endTJoinHostOther: null,
       showStartCap: true,
       showEndCap: true,
     });
@@ -192,6 +319,10 @@ export function createWallManager(args: {
         endJoinOther: null,
         startConnected: false,
         endConnected: false,
+        startConnectionCount: 0,
+        endConnectionCount: 0,
+        startTJoinHostOther: null,
+        endTJoinHostOther: null,
       }
     );
 

@@ -184,6 +184,10 @@ export function createWallDimensions(
     endJoinOther?: Pt | null;
     startConnected?: boolean;
     endConnected?: boolean;
+    startConnectionCount?: number;
+    endConnectionCount?: number;
+    startTJoinHostOther?: Pt | null;
+    endTJoinHostOther?: Pt | null;
   }
 ): WallDimensionVisual {
   const showStartThickness = options?.showStartThickness ?? true;
@@ -205,6 +209,10 @@ export function createWallDimensions(
   const stripPoints = buildWallStripPoints(centerA, centerB, thickness, {
     startJoinOther: options?.startJoinOther ?? null,
     endJoinOther: options?.endJoinOther ?? null,
+    startConnectionCount: options?.startConnectionCount ?? 0,
+    endConnectionCount: options?.endConnectionCount ?? 0,
+    startTJoinHostOther: options?.startTJoinHostOther ?? null,
+    endTJoinHostOther: options?.endTJoinHostOther ?? null,
   });
 
   const topGeomStart = stripPoints[0];
@@ -229,9 +237,6 @@ export function createWallDimensions(
     offset: mainOffset,
   });
 
-  // Important:
-  // Connected ends must still use the real wall-face endpoints.
-  // We hide only ticks, not trim the main dimension line.
   const topStartPt = topDim.start;
   const topEndPt = topDim.end;
   const bottomStartPt = bottomDim.start;
