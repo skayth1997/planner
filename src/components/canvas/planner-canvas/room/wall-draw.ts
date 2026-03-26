@@ -49,6 +49,7 @@ export function createWallDrawController(args: {
   splitSegmentWallAtPoint?: (args: { id: string; point: Pt }) => Pt | null;
   onCommitSegmentWall?: (a: Pt, b: Pt, thickness: number) => void;
   onCommitBlockWall?: (center: Pt, size: number, thickness: number) => void;
+  onDeactivateRequested?: () => void;
   scheduleRender?: () => void;
 }) {
   const {
@@ -58,6 +59,7 @@ export function createWallDrawController(args: {
     splitSegmentWallAtPoint,
     onCommitSegmentWall,
     onCommitBlockWall,
+    onDeactivateRequested,
     scheduleRender,
   } = args;
 
@@ -331,17 +333,10 @@ export function createWallDrawController(args: {
       isPointerDown = false;
       dragStart = null;
       clearAllWallPreview(canvas, preview);
+      currentMouse = null;
 
-      if (currentMouse) {
-        renderWallCursor({
-          canvas,
-          state: preview,
-          point: currentMouse,
-          thickness: getDefaultThickness(),
-        });
-      }
-
-      renderNow();
+      onDeactivateRequested?.();
+      return;
     }
   };
 

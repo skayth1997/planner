@@ -39,8 +39,11 @@ type WallManager = ReturnType<typeof createWallManager>;
 
 export default forwardRef<
   PlannerCanvasHandle,
-  { onSelectionChange?: (info: SelectedInfo | null) => void }
->(function PlannerCanvas({ onSelectionChange }, ref) {
+  {
+    onSelectionChange?: (info: SelectedInfo | null) => void;
+    onDrawModeChange?: (active: boolean) => void;
+  }
+>(function PlannerCanvas({ onSelectionChange, onDrawModeChange }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const htmlCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -83,6 +86,17 @@ export default forwardRef<
       current: roomFillsRef.current,
       wallThickness: wallManager.getDefaultThickness(),
     });
+  };
+
+  const stopDrawModeInternal = () => {
+    wallDrawRef.current?.stop();
+    onDrawModeChange?.(false);
+  };
+
+  const startDrawModeInternal = () => {
+    wallSelectionRef.current?.clearSelection();
+    wallDrawRef.current?.start();
+    onDrawModeChange?.(true);
   };
 
   const deleteWallByIdInternal = (wallId: string) => {
@@ -224,6 +238,9 @@ export default forwardRef<
         wallSelection.rerenderSelectionVisuals();
         safeRender();
       },
+      onDeactivateRequested: () => {
+        stopDrawModeInternal();
+      },
       scheduleRender,
     });
 
@@ -320,7 +337,7 @@ export default forwardRef<
       fabricCanvasRef.current = null;
       scheduleRenderRef.current = null;
     };
-  }, [onSelectionChange]);
+  }, [onSelectionChange, onDrawModeChange]);
 
   useImperativeHandle(ref, () => ({
     addFurniture(_: FurnitureType) {},
@@ -389,12 +406,11 @@ export default forwardRef<
     },
 
     startDrawRoom() {
-      wallSelectionRef.current?.clearSelection();
-      wallDrawRef.current?.start();
+      startDrawModeInternal();
     },
 
     stopDrawRoom() {
-      wallDrawRef.current?.stop();
+      stopDrawModeInternal();
     },
 
     addRoom() {},

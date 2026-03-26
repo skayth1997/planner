@@ -575,6 +575,7 @@ export default function HomePage() {
             <PlannerCanvas
               ref={canvasRef}
               onSelectionChange={onSelectionChange}
+              onDrawModeChange={setIsDrawingWalls}
             />
           </div>
         </section>
