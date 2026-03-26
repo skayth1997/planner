@@ -286,8 +286,8 @@ function createDimensionSide(args: {
   tickSize: number;
   textGap: number;
   hidden?: boolean;
-  startConnected?: boolean;
-  endConnected?: boolean;
+  startTickVisible?: boolean;
+  endTickVisible?: boolean;
 }) {
   const {
     faceStart,
@@ -297,8 +297,8 @@ function createDimensionSide(args: {
     tickSize,
     textGap,
     hidden = false,
-    startConnected = false,
-    endConnected = false,
+    startTickVisible = true,
+    endTickVisible = true,
   } = args;
 
   const dim = createOffsetDimensionSegmentFromFace({
@@ -340,7 +340,7 @@ function createDimensionSide(args: {
   const endTickPts = makePerpTick(endPt, dim.nx, dim.ny, tickSize);
 
   const startTick =
-    hidden || startConnected
+    hidden || !startTickVisible
       ? createHiddenDimensionLine(startPt.x, startPt.y)
       : createDimensionLine(
           startTickPts.a.x,
@@ -350,7 +350,7 @@ function createDimensionSide(args: {
         );
 
   const endTick =
-    hidden || endConnected
+    hidden || !endTickVisible
       ? createHiddenDimensionLine(endPt.x, endPt.y)
       : createDimensionLine(
           endTickPts.a.x,
@@ -374,9 +374,6 @@ function createDimensionSide(args: {
     startTick,
     endTick,
     text,
-    startPt,
-    endPt,
-    displayLength,
   };
 }
 
@@ -402,6 +399,11 @@ export function createWallDimensions(
     outerDimensionVisible?: boolean;
     outerDimensionStartConnected?: boolean;
     outerDimensionEndConnected?: boolean;
+
+    topStartTickVisible?: boolean;
+    topEndTickVisible?: boolean;
+    bottomStartTickVisible?: boolean;
+    bottomEndTickVisible?: boolean;
   }
 ): WallDimensionVisual {
   const showStartThickness = options?.showStartThickness ?? true;
@@ -437,10 +439,6 @@ export function createWallDimensions(
   const localTopLen = distance(topGeomStart, topGeomEnd);
   const localBottomLen = distance(bottomGeomStart, bottomGeomEnd);
 
-  /**
-   * In a T-host split, the continuous outer side is usually the longer side.
-   * We will use that side later for the merged outer dimension chain.
-   */
   const outerIsTop = localTopLen >= localBottomLen;
 
   let topFace: FaceGeom = {
@@ -481,21 +479,34 @@ export function createWallDimensions(
   const topIsHidden = outerIsTop && !outerDimensionVisible;
   const bottomIsHidden = !outerIsTop && !outerDimensionVisible;
 
-  const topStartConnected = outerIsTop
-    ? options?.outerDimensionStartConnected ?? startConnected
-    : startConnected;
+  const defaultTopStartTickVisible = !startConnected;
+  const defaultTopEndTickVisible = !endConnected;
+  const defaultBottomStartTickVisible = !startConnected;
+  const defaultBottomEndTickVisible = !endConnected;
 
-  const topEndConnected = outerIsTop
-    ? options?.outerDimensionEndConnected ?? endConnected
-    : endConnected;
+  const mergedOuterStartTickVisible = !(outerIsTop
+    ? options?.outerDimensionStartConnected ?? false
+    : options?.outerDimensionStartConnected ?? false);
 
-  const bottomStartConnected = !outerIsTop
-    ? options?.outerDimensionStartConnected ?? startConnected
-    : startConnected;
+  const mergedOuterEndTickVisible = !(outerIsTop
+    ? options?.outerDimensionEndConnected ?? false
+    : options?.outerDimensionEndConnected ?? false);
 
-  const bottomEndConnected = !outerIsTop
-    ? options?.outerDimensionEndConnected ?? endConnected
-    : endConnected;
+  const topStartTickVisible = outerIsTop
+    ? options?.topStartTickVisible ?? mergedOuterStartTickVisible
+    : options?.topStartTickVisible ?? defaultTopStartTickVisible;
+
+  const topEndTickVisible = outerIsTop
+    ? options?.topEndTickVisible ?? mergedOuterEndTickVisible
+    : options?.topEndTickVisible ?? defaultTopEndTickVisible;
+
+  const bottomStartTickVisible = !outerIsTop
+    ? options?.bottomStartTickVisible ?? mergedOuterStartTickVisible
+    : options?.bottomStartTickVisible ?? defaultBottomStartTickVisible;
+
+  const bottomEndTickVisible = !outerIsTop
+    ? options?.bottomEndTickVisible ?? mergedOuterEndTickVisible
+    : options?.bottomEndTickVisible ?? defaultBottomEndTickVisible;
 
   const topSide = createDimensionSide({
     faceStart: topFace.start,
@@ -505,8 +516,8 @@ export function createWallDimensions(
     tickSize,
     textGap,
     hidden: topIsHidden,
-    startConnected: topStartConnected,
-    endConnected: topEndConnected,
+    startTickVisible: topStartTickVisible,
+    endTickVisible: topEndTickVisible,
   });
 
   const bottomSide = createDimensionSide({
@@ -517,8 +528,8 @@ export function createWallDimensions(
     tickSize,
     textGap,
     hidden: bottomIsHidden,
-    startConnected: bottomStartConnected,
-    endConnected: bottomEndConnected,
+    startTickVisible: bottomStartTickVisible,
+    endTickVisible: bottomEndTickVisible,
   });
 
   const topLineLeft = topSide.lineLeft;

@@ -335,18 +335,12 @@ export function createWallManager(args: {
 
     const ownerWall = chain.slice().sort((a, b) => a.id.localeCompare(b.id))[0];
 
-    const ownerTouchesStart =
-      sameNode(ownerWall.a, chainStart) || sameNode(ownerWall.b, chainStart);
-
-    const ownerTouchesEnd =
-      sameNode(ownerWall.a, chainEnd) || sameNode(ownerWall.b, chainEnd);
-
     return {
       chainStart,
       chainEnd,
       ownerWallId: ownerWall.id,
-      ownerStartConnected: !ownerTouchesStart,
-      ownerEndConnected: !ownerTouchesEnd,
+      ownerStartConnected: false,
+      ownerEndConnected: false,
     };
   };
 
@@ -369,6 +363,26 @@ export function createWallManager(args: {
 
     removeWallDimensions(canvas, wall.dimensions);
 
+    const startIsCorner =
+      joinData.startConnectionCount > 0 &&
+      !joinData.startTJoinHostOther &&
+      !!joinData.startJoinOther;
+
+    const endIsCorner =
+      joinData.endConnectionCount > 0 &&
+      !joinData.endTJoinHostOther &&
+      !!joinData.endJoinOther;
+
+    const topStartTickVisible =
+      startIsCorner || joinData.startConnectionCount === 0;
+    const topEndTickVisible = endIsCorner || joinData.endConnectionCount === 0;
+
+    const bottomStartTickVisible =
+      startIsCorner || joinData.startConnectionCount === 0;
+
+    const bottomEndTickVisible =
+      endIsCorner || joinData.endConnectionCount === 0;
+
     wall.dimensions = createWallDimensions(
       canvas,
       wall.a,
@@ -385,7 +399,6 @@ export function createWallManager(args: {
         endConnectionCount: joinData.endConnectionCount,
         startTJoinHostOther: joinData.startTJoinHostOther,
         endTJoinHostOther: joinData.endTJoinHostOther,
-
         outerDimensionChainStart: outerChain?.chainStart ?? null,
         outerDimensionChainEnd: outerChain?.chainEnd ?? null,
         outerDimensionVisible: outerChain
@@ -397,6 +410,10 @@ export function createWallManager(args: {
         outerDimensionEndConnected: outerChain
           ? outerChain.ownerEndConnected
           : joinData.endConnectionCount > 0,
+        topStartTickVisible,
+        topEndTickVisible,
+        bottomStartTickVisible,
+        bottomEndTickVisible,
       }
     );
   };
