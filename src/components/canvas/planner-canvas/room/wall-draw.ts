@@ -1,12 +1,15 @@
 import type { Canvas } from "fabric";
 import type { Pt } from "../core/planner-types";
 import {
-  analyzeWallCandidate,
+  analyzeWallCandidateWithTerminalTarget,
   distanceBetween,
+  findFirstWallCrossing,
+  findNearestWallConnectionTarget,
   isLongEnough,
   MIN_WALL_LENGTH,
-  projectPointToSegment,
   snapPointToWallEndpoint,
+  type WallConnectionTarget,
+  type WallCrossingTarget,
 } from "./wall-geometry";
 import {
   clearAllWallPreview,
@@ -70,35 +73,6 @@ export function createWallDrawController(args: {
     scheduleRender?.() ?? canvas.requestRenderAll();
   };
 
-  const findWallAtPoint = (
-    point: Pt,
-    options?: {
-      ignoreWallIds?: string[];
-      tolerance?: number;
-    }
-  ) => {
-    const ignoreWallIds = new Set(options?.ignoreWallIds ?? []);
-    const tolerance = options?.tolerance ?? 12;
-
-    let best: { wall: LinearWallRef; distance: number } | null = null;
-
-    for (const wall of getLinearWalls()) {
-      if (ignoreWallIds.has(wall.id)) continue;
-
-      const projection = projectPointToSegment(point, wall.a, wall.b);
-      if (projection.distance > tolerance) continue;
-
-      if (!best || projection.distance < best.distance) {
-        best = {
-          wall,
-          distance: projection.distance,
-        };
-      }
-    }
-
-    return best?.wall ?? null;
-  };
-
   const getSnappedEndPoint = (end: Pt, ignoreWallIds?: string[]) => {
     return snapPointToWallEndpoint({
       point: end,
@@ -107,14 +81,49 @@ export function createWallDrawController(args: {
     });
   };
 
+  const pickTerminalTarget = (
+    start: Pt,
+    rawEnd: Pt
+  ): WallConnectionTarget | WallCrossingTarget | null => {
+    const endpointSnap = getSnappedEndPoint(rawEnd);
+
+    const endpointTarget = findNearestWallConnectionTarget({
+      point: endpointSnap,
+      walls: getLinearWalls(),
+    });
+
+    if (endpointTarget) {
+      return endpointTarget;
+    }
+
+    const firstCrossing = findFirstWallCrossing({
+      start,
+      end: rawEnd,
+      walls: getLinearWalls(),
+    });
+
+    if (!firstCrossing) return null;
+
+    const overshootDistance = distanceBetween(firstCrossing.point, rawEnd);
+
+    // User dragged noticeably beyond the crossing point,
+    // so treat that crossed wall as intentional connection target.
+    if (overshootDistance >= 10) {
+      return firstCrossing;
+    }
+
+    return null;
+  };
+
   const renderDrag = (start: Pt, rawEnd: Pt) => {
     const thickness = getDefaultThickness();
-    const snappedEnd = getSnappedEndPoint(rawEnd);
+    const terminalTarget = pickTerminalTarget(start, rawEnd);
 
-    const analysis = analyzeWallCandidate({
+    const analysis = analyzeWallCandidateWithTerminalTarget({
       start,
-      end: snappedEnd,
+      rawEnd,
       walls: getLinearWalls(),
+      terminalTarget,
     });
 
     renderWallGuides({
@@ -138,7 +147,7 @@ export function createWallDrawController(args: {
     });
 
     renderNow();
-    return analysis;
+    return { analysis, terminalTarget };
   };
 
   const resolveStartPoint = (point: Pt, target: any): Pt | null => {
@@ -160,38 +169,35 @@ export function createWallDrawController(args: {
   };
 
   const resolveEndPoint = (point: Pt, startPoint: Pt): Pt => {
-    const touchedWall = findWallAtPoint(point, {
-      tolerance: 12,
+    const terminalTarget = pickTerminalTarget(startPoint, point);
+
+    const analysis = analyzeWallCandidateWithTerminalTarget({
+      start: startPoint,
+      rawEnd: point,
+      walls: getLinearWalls(),
+      terminalTarget,
     });
 
-    if (!touchedWall || !splitSegmentWallAtPoint) {
-      const snappedEnd = getSnappedEndPoint(point);
+    let finalEnd = analysis.validEnd ?? point;
 
-      const analysis = analyzeWallCandidate({
-        start: startPoint,
-        end: snappedEnd,
-        walls: getLinearWalls(),
+    if (
+      terminalTarget &&
+      analysis.targetWallId &&
+      splitSegmentWallAtPoint
+    ) {
+      const splitPoint = splitSegmentWallAtPoint({
+        id: terminalTarget.wall.id,
+        point: terminalTarget.point,
       });
 
-      return analysis.validEnd ?? snappedEnd;
+      if (splitPoint) {
+        finalEnd = splitPoint;
+      } else {
+        finalEnd = terminalTarget.point;
+      }
     }
 
-    const splitPoint = splitSegmentWallAtPoint({
-      id: touchedWall.id,
-      point,
-    });
-
-    const candidateEnd = splitPoint ?? point;
-    const snappedEnd = getSnappedEndPoint(candidateEnd, [touchedWall.id]);
-
-    const analysis = analyzeWallCandidate({
-      start: startPoint,
-      end: snappedEnd,
-      walls: getLinearWalls(),
-      ignoreWallId: touchedWall.id,
-    });
-
-    return analysis.validEnd ?? snappedEnd;
+    return finalEnd;
   };
 
   const commitCurrentWall = (resolvedEnd: Pt) => {

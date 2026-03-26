@@ -546,7 +546,14 @@ export default function HomePage() {
                         !canEdit && btnDisabled
                       )}
                       disabled={!canEdit}
-                      onClick={() => canvasRef.current?.deleteSelected()}
+                      onClick={() => {
+                        if (selected?.kind === "wall") {
+                          canvasRef.current?.deleteWallById?.(selected.id);
+                          return;
+                        }
+
+                        canvasRef.current?.deleteSelected();
+                      }}
                     >
                       Delete
                     </button>

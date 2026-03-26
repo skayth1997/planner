@@ -85,6 +85,18 @@ export default forwardRef<
     });
   };
 
+  const deleteWallByIdInternal = (wallId: string) => {
+    const wallSelection = wallSelectionRef.current;
+    const wallManager = wallManagerRef.current;
+
+    if (!wallSelection || !wallManager) return;
+    if (!wallId) return;
+
+    wallSelection.removeSelectedWallId(wallId);
+    wallManager.removeWall(wallId);
+    safeRender();
+  };
+
   useEffect(() => {
     if (!htmlCanvasRef.current) return;
 
@@ -254,11 +266,32 @@ export default forwardRef<
       },
     });
 
+    const onKeyDown = (e: KeyboardEvent) => {
+      const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
+      const isTyping =
+        activeTag === "INPUT" ||
+        activeTag === "TEXTAREA" ||
+        activeTag === "SELECT";
+
+      if (isTyping) return;
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const selectedWall = wallSelectionRef.current?.getSelectedWall();
+        if (!selectedWall) return;
+
+        e.preventDefault();
+        deleteWallByIdInternal(selectedWall.id);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+
     grid.rebuild();
     scheduleRender();
 
     return () => {
       window.removeEventListener("resize", resizeCanvasToContainer);
+      window.removeEventListener("keydown", onKeyDown);
 
       removeDomGuards(lowerCanvasEl);
       removeDomGuards(upperCanvasEl);
@@ -289,84 +322,89 @@ export default forwardRef<
     };
   }, [onSelectionChange]);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      addFurniture(_: FurnitureType) {},
+  useImperativeHandle(ref, () => ({
+    addFurniture(_: FurnitureType) {},
 
-      deleteSelected() {},
+    deleteSelected() {
+      const selectedWall = wallSelectionRef.current?.getSelectedWall();
+      if (!selectedWall) return;
 
-      duplicateSelected() {},
+      deleteWallByIdInternal(selectedWall.id);
+    },
 
-      setSelectedProps() {},
+    deleteWallById(wallId: string) {
+      deleteWallByIdInternal(wallId);
+    },
 
-      toggleSelectedDoor() {},
+    duplicateSelected() {},
 
-      fitRoom() {
-        const canvas = fabricCanvasRef.current;
-        const wallManager = wallManagerRef.current;
-        if (!canvas || !wallManager) return;
+    setSelectedProps() {},
 
-        const objects = wallManager.getFitObjects();
-        if (!objects.length) return;
+    toggleSelectedDoor() {},
 
-        fitObjectsToView(canvas, objects);
-        safeRender();
-      },
+    fitRoom() {
+      const canvas = fabricCanvasRef.current;
+      const wallManager = wallManagerRef.current;
+      if (!canvas || !wallManager) return;
 
-      undo() {},
+      const objects = wallManager.getFitObjects();
+      if (!objects.length) return;
 
-      redo() {},
+      fitObjectsToView(canvas, objects);
+      safeRender();
+    },
 
-      save() {},
+    undo() {},
 
-      load() {},
+    redo() {},
 
-      exportJson() {},
+    save() {},
 
-      importJsonString() {},
+    load() {},
 
-      getRoomSize() {
-        return { width: 0, height: 0 };
-      },
+    exportJson() {},
 
-      setRoomSize(_: RoomSize) {},
+    importJsonString() {},
 
-      setGridVisible(visible: boolean) {
-        gridRef.current?.setVisible(visible);
-      },
+    getRoomSize() {
+      return { width: 0, height: 0 };
+    },
 
-      setGridSize(size: number) {
-        gridRef.current?.setSize(size);
-      },
+    setRoomSize(_: RoomSize) {},
 
-      addDoor() {},
+    setGridVisible(visible: boolean) {
+      gridRef.current?.setVisible(visible);
+    },
 
-      addWindow() {},
+    setGridSize(size: number) {
+      gridRef.current?.setSize(size);
+    },
 
-      isDrawingRoom() {
-        return !!wallDrawRef.current?.isActive();
-      },
+    addDoor() {},
 
-      startDrawRoom() {
-        wallSelectionRef.current?.clearSelection();
-        wallDrawRef.current?.start();
-      },
+    addWindow() {},
 
-      stopDrawRoom() {
-        wallDrawRef.current?.stop();
-      },
+    isDrawingRoom() {
+      return !!wallDrawRef.current?.isActive();
+    },
 
-      addRoom() {},
+    startDrawRoom() {
+      wallSelectionRef.current?.clearSelection();
+      wallDrawRef.current?.start();
+    },
 
-      getActiveRoomId() {
-        return null;
-      },
+    stopDrawRoom() {
+      wallDrawRef.current?.stop();
+    },
 
-      setActiveRoom() {},
-    }),
-    []
-  );
+    addRoom() {},
+
+    getActiveRoomId() {
+      return null;
+    },
+
+    setActiveRoom() {},
+  }));
 
   return (
     <div

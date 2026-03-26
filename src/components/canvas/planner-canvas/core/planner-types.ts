@@ -54,6 +54,7 @@ export type SelectedInfo = {
 export type PlannerCanvasHandle = {
   addFurniture: (type: FurnitureType) => void;
   deleteSelected: () => void;
+  deleteWallById?: (wallId: string) => void;
   duplicateSelected: () => void;
   setSelectedProps: (
     patch: Partial<Pick<SelectedInfo, "width" | "height" | "angle" | "hinge">>

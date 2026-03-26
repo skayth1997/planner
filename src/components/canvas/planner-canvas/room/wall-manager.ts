@@ -94,6 +94,26 @@ function isCollinearDirection(a: Pt, b: Pt, tolerance = 0.999) {
   return Math.abs(dot(na, nb)) >= tolerance;
 }
 
+function areCollinearSegments(
+  a1: Pt,
+  a2: Pt,
+  b1: Pt,
+  b2: Pt,
+  tolerance = 0.999
+) {
+  const da = normalize(sub(a2, a1));
+  const db = normalize(sub(b2, b1));
+  if (!da || !db) return false;
+
+  if (Math.abs(dot(da, db)) < tolerance) {
+    return false;
+  }
+
+  const ab = sub(b1, a1);
+  const cross = da.x * ab.y - da.y * ab.x;
+  return Math.abs(cross) < 0.001;
+}
+
 function pointKey(p: Pt) {
   return `${p.x.toFixed(3)}:${p.y.toFixed(3)}`;
 }
@@ -837,6 +857,85 @@ export function createWallManager(args: {
     return { ...splitPoint };
   };
 
+  const tryMergeWallsOnce = () => {
+    const segmentWalls = walls.filter(
+      (item): item is SegmentWall => item.kind === "segment"
+    );
+
+    for (let i = 0; i < segmentWalls.length; i++) {
+      const w1 = segmentWalls[i];
+
+      for (let j = i + 1; j < segmentWalls.length; j++) {
+        const w2 = segmentWalls[j];
+
+        if (w1.id === w2.id) continue;
+        if (w1.thickness !== w2.thickness) continue;
+
+        let shared: Pt | null = null;
+
+        if (sameNode(w1.a, w2.a)) shared = w1.a;
+        else if (sameNode(w1.a, w2.b)) shared = w1.a;
+        else if (sameNode(w1.b, w2.a)) shared = w1.b;
+        else if (sameNode(w1.b, w2.b)) shared = w1.b;
+
+        if (!shared) continue;
+
+        if (!areCollinearSegments(w1.a, w1.b, w2.a, w2.b)) continue;
+
+        const endpoints: Pt[] = [];
+
+        const addUniquePoint = (point: Pt) => {
+          if (!endpoints.some((p) => sameNode(p, point))) {
+            endpoints.push({ ...point });
+          }
+        };
+
+        if (!sameNode(w1.a, shared)) addUniquePoint(w1.a);
+        if (!sameNode(w1.b, shared)) addUniquePoint(w1.b);
+        if (!sameNode(w2.a, shared)) addUniquePoint(w2.a);
+        if (!sameNode(w2.b, shared)) addUniquePoint(w2.b);
+
+        if (endpoints.length !== 2) continue;
+        if (!isLongEnough(endpoints[0], endpoints[1])) continue;
+
+        removeWallStripVisual(canvas, w1.visual);
+        removeWallDimensions(canvas, w1.dimensions);
+        removeWallStripVisual(canvas, w2.visual);
+        removeWallDimensions(canvas, w2.dimensions);
+
+        const index1 = walls.findIndex((wall) => wall.id === w1.id);
+        const index2 = walls.findIndex((wall) => wall.id === w2.id);
+
+        const indexes = [index1, index2]
+          .filter((index) => index !== -1)
+          .sort((a, b) => b - a);
+
+        for (const index of indexes) {
+          walls.splice(index, 1);
+        }
+
+        const mergedWall = createSegmentWallItem({
+          a: endpoints[0],
+          b: endpoints[1],
+          thickness: w1.thickness,
+        });
+
+        walls.push(mergedWall);
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const normalizeWallGraph = () => {
+    let merged = true;
+
+    while (merged) {
+      merged = tryMergeWallsOnce();
+    }
+  };
+
   const removeWall = (id: string) => {
     const index = walls.findIndex((wall) => wall.id === id);
     if (index === -1) return;
@@ -847,6 +946,9 @@ export function createWallManager(args: {
     removeWallDimensions(canvas, wall.dimensions);
 
     walls.splice(index, 1);
+
+    normalizeWallGraph();
+
     refreshAllSegmentWalls();
     onChange?.();
   };

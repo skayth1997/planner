@@ -70,6 +70,7 @@ export function projectPointToSegment(point: Pt, a: Pt, b: Pt) {
 
 type IntersectionHit = {
   t: number;
+  u: number;
   point: Pt;
 };
 
@@ -113,8 +114,9 @@ function getSegmentIntersection(
     }
 
     return {
-      t: tMin,
-      point: pointAt(a, b, tMin),
+      t: clamp01(tMin),
+      u: 0,
+      point: pointAt(a, b, clamp01(tMin)),
     };
   }
 
@@ -132,6 +134,7 @@ function getSegmentIntersection(
 
   return {
     t: clamp01(t),
+    u: clamp01(u),
     point: pointAt(a, b, clamp01(t)),
   };
 }
@@ -143,6 +146,30 @@ export type WallCandidateAnalysis = {
   blockedAtStart: boolean;
   hasInvalidTail: boolean;
   canCommit: boolean;
+};
+
+export type WallConnectionTarget = {
+  wall: LinearWallLike;
+  point: Pt;
+  t: number;
+  distance: number;
+};
+
+export type WallCrossingTarget = {
+  wall: LinearWallLike;
+  point: Pt;
+  t: number;
+};
+
+export type TerminalWallCandidateAnalysis = {
+  rawEnd: Pt;
+  validEnd: Pt | null;
+  invalidFrom: Pt | null;
+  blockedAtStart: boolean;
+  hasInvalidTail: boolean;
+  canCommit: boolean;
+  targetWallId: string | null;
+  targetPoint: Pt | null;
 };
 
 export function findNearestWallEndpoint(args: {
@@ -196,6 +223,80 @@ export function snapPointToWallEndpoint(args: {
   return snapped ?? args.point;
 }
 
+export function findNearestWallConnectionTarget(args: {
+  point: Pt;
+  walls: LinearWallLike[];
+  ignoreWallId?: string | null;
+  ignoreWallIds?: string[];
+  maxDistance?: number;
+}) {
+  const {
+    point,
+    walls,
+    ignoreWallId,
+    ignoreWallIds,
+    maxDistance = 12,
+  } = args;
+
+  const ignoredIds = new Set<string>(ignoreWallIds ?? []);
+  if (ignoreWallId) ignoredIds.add(ignoreWallId);
+
+  let best: WallConnectionTarget | null = null;
+
+  for (const wall of walls) {
+    if (ignoredIds.has(wall.id)) continue;
+
+    const projection = projectPointToSegment(point, wall.a, wall.b);
+    if (projection.distance > maxDistance) continue;
+
+    if (!best || projection.distance < best.distance) {
+      best = {
+        wall,
+        point: projection.point,
+        t: projection.t,
+        distance: projection.distance,
+      };
+    }
+  }
+
+  return best;
+}
+
+export function findFirstWallCrossing(args: {
+  start: Pt;
+  end: Pt;
+  walls: LinearWallLike[];
+  ignoreWallId?: string | null;
+  ignoreWallIds?: string[];
+}) {
+  const { start, end, walls, ignoreWallId, ignoreWallIds } = args;
+
+  const ignoredIds = new Set<string>(ignoreWallIds ?? []);
+  if (ignoreWallId) ignoredIds.add(ignoreWallId);
+
+  let best: WallCrossingTarget | null = null;
+
+  for (const wall of walls) {
+    if (ignoredIds.has(wall.id)) continue;
+
+    const hit = getSegmentIntersection(start, end, wall.a, wall.b);
+    if (!hit) continue;
+
+    if (sharesEndpoint(start, end, wall.a, wall.b)) continue;
+    if (hit.t <= EPS || hit.t >= 1 - EPS) continue;
+
+    if (!best || hit.t < best.t) {
+      best = {
+        wall,
+        point: hit.point,
+        t: hit.t,
+      };
+    }
+  }
+
+  return best;
+}
+
 export function analyzeWallCandidate(args: {
   start: Pt;
   end: Pt;
@@ -242,6 +343,81 @@ export function analyzeWallCandidate(args: {
   };
 }
 
+export function analyzeWallCandidateWithTerminalTarget(args: {
+  start: Pt;
+  rawEnd: Pt;
+  walls: LinearWallLike[];
+  terminalTarget?: WallConnectionTarget | WallCrossingTarget | null;
+  ignoreWallId?: string | null;
+  ignoreWallIds?: string[];
+}) {
+  const {
+    start,
+    rawEnd,
+    walls,
+    terminalTarget,
+    ignoreWallId,
+    ignoreWallIds,
+  } = args;
+
+  const ignoredIds = new Set<string>(ignoreWallIds ?? []);
+  if (ignoreWallId) ignoredIds.add(ignoreWallId);
+
+  if (terminalTarget) {
+    ignoredIds.add(terminalTarget.wall.id);
+  }
+
+  const desiredEnd = terminalTarget ? terminalTarget.point : rawEnd;
+
+  let bestT = 1;
+  let hitPoint: Pt | null = null;
+
+  for (const wall of walls) {
+    if (ignoredIds.has(wall.id)) continue;
+
+    const hit = getSegmentIntersection(start, desiredEnd, wall.a, wall.b);
+    if (!hit) continue;
+
+    if (sharesEndpoint(start, desiredEnd, wall.a, wall.b)) continue;
+    if (hit.t <= EPS) continue;
+
+    if (hit.t < bestT) {
+      bestT = hit.t;
+      hitPoint = hit.point;
+    }
+  }
+
+  if (hitPoint) {
+    const validEnd = hitPoint;
+    const canCommit = isLongEnough(start, validEnd);
+
+    return {
+      rawEnd,
+      validEnd,
+      invalidFrom: hitPoint,
+      blockedAtStart: false,
+      hasInvalidTail: distanceBetween(validEnd, desiredEnd) > EPS,
+      canCommit,
+      targetWallId: null,
+      targetPoint: null,
+    } as TerminalWallCandidateAnalysis;
+  }
+
+  const validEnd = desiredEnd;
+  const canCommit = isLongEnough(start, validEnd);
+
+  return {
+    rawEnd,
+    validEnd,
+    invalidFrom: null,
+    blockedAtStart: false,
+    hasInvalidTail: false,
+    canCommit,
+    targetWallId: terminalTarget?.wall.id ?? null,
+    targetPoint: terminalTarget ? terminalTarget.point : null,
+  } as TerminalWallCandidateAnalysis;
+}
+
 export function canPlaceSegmentAgainstWalls(args: {
   a: Pt;
   b: Pt;
@@ -262,6 +438,50 @@ export function canPlaceSegmentAgainstWalls(args: {
 
     const hit = getSegmentIntersection(a, b, wall.a, wall.b);
     if (!hit) continue;
+
+    return false;
+  }
+
+  return true;
+}
+
+export function canPlaceSegmentAgainstWallsWithTerminalTarget(args: {
+  a: Pt;
+  b: Pt;
+  walls: LinearWallLike[];
+  terminalTarget?: WallConnectionTarget | WallCrossingTarget | null;
+  ignoreWallId?: string | null;
+  ignoreWallIds?: string[];
+}) {
+  const {
+    a,
+    b,
+    walls,
+    terminalTarget,
+    ignoreWallId,
+    ignoreWallIds,
+  } = args;
+
+  const ignoredIds = new Set<string>(ignoreWallIds ?? []);
+  if (ignoreWallId) ignoredIds.add(ignoreWallId);
+
+  if (!isLongEnough(a, b)) return false;
+
+  const terminalWallId = terminalTarget?.wall.id ?? null;
+
+  for (const wall of walls) {
+    if (ignoredIds.has(wall.id)) continue;
+    if (sharesEndpoint(a, b, wall.a, wall.b)) continue;
+
+    const hit = getSegmentIntersection(a, b, wall.a, wall.b);
+    if (!hit) continue;
+
+    if (terminalWallId && wall.id === terminalWallId) {
+      const nearEnd = Math.abs(hit.t - 1) <= 0.001;
+      if (nearEnd) {
+        continue;
+      }
+    }
 
     return false;
   }

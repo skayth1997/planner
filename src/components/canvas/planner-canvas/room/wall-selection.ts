@@ -129,7 +129,7 @@ export function createWallSelectionController(args: {
     const connectedSegmentWalls = walls.filter((wall): wall is Extract<
       WallItem,
       { kind: "segment" }
-    > => {
+      > => {
       if (wall.kind !== "segment") return false;
       if (wall.id === selectedWall.id) return false;
 
@@ -232,6 +232,15 @@ export function createWallSelectionController(args: {
     renderNow();
   };
 
+  const removeSelectedWallId = (wallId: string) => {
+    if (selectedWallId !== wallId) return;
+    selectedWallId = null;
+    clearSelectionVisuals();
+    applyInteractionStyles();
+    emitSelection();
+    renderNow();
+  };
+
   const selectWallById = (wallId: string) => {
     if (!selectionEnabled()) return;
 
@@ -308,6 +317,7 @@ export function createWallSelectionController(args: {
     start,
     stop,
     clearSelection,
+    removeSelectedWallId,
     selectWallById,
     getSelectedWall,
     getSelectedWallId: () => selectedWallId,
