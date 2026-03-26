@@ -8,9 +8,8 @@ import {
   isLongEnough,
   MIN_WALL_LENGTH,
   snapPointToWallEndpoint,
-  type WallConnectionTarget,
-  type WallCrossingTarget,
 } from "./wall-geometry";
+import type { WallConnectionTarget, WallCrossingTarget } from "./wall-geometry";
 import {
   clearAllWallPreview,
   createWallPreviewState,
@@ -106,8 +105,6 @@ export function createWallDrawController(args: {
 
     const overshootDistance = distanceBetween(firstCrossing.point, rawEnd);
 
-    // User dragged noticeably beyond the crossing point,
-    // so treat that crossed wall as intentional connection target.
     if (overshootDistance >= 10) {
       return firstCrossing;
     }
@@ -144,6 +141,7 @@ export function createWallDrawController(args: {
       canvas,
       state: preview,
       point: rawEnd,
+      thickness,
     });
 
     renderNow();
@@ -180,11 +178,7 @@ export function createWallDrawController(args: {
 
     let finalEnd = analysis.validEnd ?? point;
 
-    if (
-      terminalTarget &&
-      analysis.targetWallId &&
-      splitSegmentWallAtPoint
-    ) {
+    if (terminalTarget && analysis.targetWallId && splitSegmentWallAtPoint) {
       const splitPoint = splitSegmentWallAtPoint({
         id: terminalTarget.wall.id,
         point: terminalTarget.point,
@@ -230,6 +224,7 @@ export function createWallDrawController(args: {
       canvas,
       state: preview,
       point,
+      thickness: getDefaultThickness(),
     });
 
     renderNow();
@@ -265,6 +260,7 @@ export function createWallDrawController(args: {
       canvas,
       state: preview,
       point,
+      thickness: getDefaultThickness(),
     });
 
     renderNow();
@@ -288,6 +284,7 @@ export function createWallDrawController(args: {
       canvas,
       state: preview,
       point,
+      thickness: getDefaultThickness(),
     });
 
     renderNow();
@@ -319,6 +316,7 @@ export function createWallDrawController(args: {
       canvas,
       state: preview,
       point,
+      thickness,
     });
 
     renderNow();
@@ -339,6 +337,7 @@ export function createWallDrawController(args: {
           canvas,
           state: preview,
           point: currentMouse,
+          thickness: getDefaultThickness(),
         });
       }
 

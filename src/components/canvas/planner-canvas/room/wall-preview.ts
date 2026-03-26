@@ -1,14 +1,9 @@
-import type { Canvas, Circle, Line, Path, Polygon } from "fabric";
+import type { Canvas, Circle, Line } from "fabric";
 import {
   Circle as FabricCircle,
   Line as FabricLine,
-  Path as FabricPath,
-  Pattern,
-  Polygon as FabricPolygon,
 } from "fabric";
 import type { Pt } from "../core/planner-types";
-import { insetPolygon } from "./polygon-geometry";
-import { applyPolygonAbsolutePoints } from "./room-geometry";
 import {
   addWallStripVisualToCanvas,
   createWallStripVisual,
@@ -16,106 +11,14 @@ import {
   type WallStripVisual,
 } from "./room-visual";
 
-const CURSOR_WALL_SIZE = 20;
-const CURSOR_WALL_THICKNESS = 8;
-
 let cachedCursorWallPatternSource: HTMLCanvasElement | null = null;
-
-function pointsToPath(points: Pt[]) {
-  if (!points.length) return "";
-
-  const [first, ...rest] = points;
-
-  return (
-    `M ${first.x} ${first.y} ` +
-    rest.map((p) => `L ${p.x} ${p.y}`).join(" ") +
-    " Z"
-  );
-}
-
-function getCursorWallPatternSource() {
-  if (cachedCursorWallPatternSource) return cachedCursorWallPatternSource;
-
-  const size = 10;
-  const patternCanvas = document.createElement("canvas");
-  patternCanvas.width = size;
-  patternCanvas.height = size;
-
-  const ctx = patternCanvas.getContext("2d");
-  if (!ctx) return null;
-
-  ctx.clearRect(0, 0, size, size);
-
-  ctx.strokeStyle = "rgba(17,24,39,0.7)";
-  ctx.lineWidth = 1;
-
-  ctx.beginPath();
-  ctx.moveTo(0, size);
-  ctx.lineTo(size, 0);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(-size, size);
-  ctx.lineTo(0, 0);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(size, size);
-  ctx.lineTo(size * 2, 0);
-  ctx.stroke();
-
-  cachedCursorWallPatternSource = patternCanvas;
-  return patternCanvas;
-}
-
-function createCursorWallBandPath(outerPoints: Pt[], innerPoints: Pt[]) {
-  const outerPath = pointsToPath(outerPoints);
-  const innerPath = pointsToPath([...innerPoints].reverse());
-
-  const patternSource = getCursorWallPatternSource();
-
-  return new FabricPath(`${outerPath} ${innerPath}`, {
-    fill: patternSource
-      ? new Pattern({
-        source: patternSource,
-        repeat: "repeat",
-      })
-      : "#f4f2ec",
-    strokeWidth: 0,
-    selectable: false,
-    evented: false,
-    objectCaching: true,
-    excludeFromExport: true,
-  });
-}
-
-function buildCursorWallPoints(anchor: Pt) {
-  const size = CURSOR_WALL_SIZE;
-  const half = size / 2;
-
-  const left = anchor.x - half;
-  const top = anchor.y - half;
-
-  const outer: Pt[] = [
-    { x: left, y: top },
-    { x: left + size, y: top },
-    { x: left + size, y: top + size },
-    { x: left, y: top + size },
-  ];
-
-  const inner = insetPolygon(outer, CURSOR_WALL_THICKNESS);
-
-  return { outer, inner };
-}
 
 export type WallPreviewState = {
   validWall: WallStripVisual | null;
   guideLines: Line[];
   guideCircle: Circle | null;
   guideCenter: Circle | null;
-  cursorOuter: Polygon | null;
-  cursorInner: Polygon | null;
-  cursorBand: Path | null;
+  cursorWall: WallStripVisual | null;
 };
 
 export function createWallPreviewState(): WallPreviewState {
@@ -124,10 +27,12 @@ export function createWallPreviewState(): WallPreviewState {
     guideLines: [],
     guideCircle: null,
     guideCenter: null,
-    cursorOuter: null,
-    cursorInner: null,
-    cursorBand: null,
+    cursorWall: null,
   };
+}
+
+function getCursorWallLength(thickness: number) {
+  return Math.max(thickness, 10);
 }
 
 export function clearDragPreview(canvas: Canvas, state: WallPreviewState) {
@@ -155,19 +60,9 @@ export function clearGuides(canvas: Canvas, state: WallPreviewState) {
 }
 
 export function clearCursor(canvas: Canvas, state: WallPreviewState) {
-  if (state.cursorBand) {
-    canvas.remove(state.cursorBand);
-    state.cursorBand = null;
-  }
-
-  if (state.cursorOuter) {
-    canvas.remove(state.cursorOuter);
-    state.cursorOuter = null;
-  }
-
-  if (state.cursorInner) {
-    canvas.remove(state.cursorInner);
-    state.cursorInner = null;
+  if (state.cursorWall) {
+    removeWallStripVisual(canvas, state.cursorWall);
+    state.cursorWall = null;
   }
 }
 
@@ -226,8 +121,14 @@ export function renderWallGuides(args: {
   };
 
   const lines = [
-    new FabricLine([start.x - big, start.y, start.x + big, start.y], guideStyle),
-    new FabricLine([start.x, start.y - big, start.x, start.y + big], guideStyle),
+    new FabricLine(
+      [start.x - big, start.y, start.x + big, start.y],
+      guideStyle
+    ),
+    new FabricLine(
+      [start.x, start.y - big, start.x, start.y + big],
+      guideStyle
+    ),
     new FabricLine(
       [start.x - big, start.y - big, start.x + big, start.y + big],
       guideStyle
@@ -278,46 +179,33 @@ export function renderWallCursor(args: {
   canvas: Canvas;
   state: WallPreviewState;
   point: Pt;
+  thickness: number;
 }) {
-  const { canvas, state, point } = args;
+  const { canvas, state, point, thickness } = args;
 
   clearCursor(canvas, state);
 
-  const { outer, inner } = buildCursorWallPoints(point);
+  const length = getCursorWallLength(thickness);
+  const half = length / 2;
 
-  state.cursorBand = createCursorWallBandPath(outer, inner);
-  canvas.add(state.cursorBand);
+  const a: Pt = {
+    x: point.x - half,
+    y: point.y,
+  };
 
-  state.cursorOuter = new FabricPolygon([], {
-    fill: "transparent",
-    stroke: "#111827",
-    strokeWidth: 1.8,
-    strokeLineJoin: "miter",
+  const b: Pt = {
+    x: point.x + half,
+    y: point.y,
+  };
+
+  state.cursorWall = createWallStripVisual(a, b, thickness, {
+    kind: "wall-preview-cursor",
+    excludeFromExport: true,
     selectable: false,
     evented: false,
-    objectCaching: true,
-    perPixelTargetFind: false,
-    strokeUniform: true,
-    excludeFromExport: true,
+    showStartCap: true,
+    showEndCap: true,
   });
-  applyPolygonAbsolutePoints(state.cursorOuter, outer);
-  canvas.add(state.cursorOuter);
 
-  state.cursorInner = new FabricPolygon([], {
-    fill: "#ffffff",
-    stroke: "#111827",
-    strokeWidth: 1.8,
-    strokeLineJoin: "miter",
-    selectable: false,
-    evented: false,
-    objectCaching: true,
-    perPixelTargetFind: false,
-    strokeUniform: true,
-    excludeFromExport: true,
-  });
-  applyPolygonAbsolutePoints(state.cursorInner, inner);
-  canvas.add(state.cursorInner);
-
-  canvas.bringObjectToFront(state.cursorOuter);
-  canvas.bringObjectToFront(state.cursorInner);
+  addWallStripVisualToCanvas(canvas, state.cursorWall);
 }
