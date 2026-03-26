@@ -84,6 +84,29 @@ function createDimensionText(
   }) as Text;
 }
 
+function createHiddenDimensionText(
+  left: number,
+  top: number,
+  angleDeg: number
+): Text {
+  return new FabricText("", {
+    left,
+    top,
+    originX: "center",
+    originY: "center",
+    fontSize: 14,
+    fontWeight: "600",
+    fill: "#111",
+    angle: angleDeg,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    selectable: false,
+    evented: false,
+    excludeFromExport: true,
+    objectCaching: false,
+    visible: false,
+  }) as Text;
+}
+
 function normalizeTextAngle(angleDeg: number) {
   let a = angleDeg;
 
@@ -124,6 +147,32 @@ function midpoint(a: Pt, b: Pt): Pt {
 
 function dot(a: Pt, b: Pt) {
   return a.x * b.x + a.y * b.y;
+}
+
+function sub(a: Pt, b: Pt): Pt {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+function add(a: Pt, b: Pt): Pt {
+  return { x: a.x + b.x, y: a.y + b.y };
+}
+
+function mul(v: Pt, s: number): Pt {
+  return { x: v.x * s, y: v.y * s };
+}
+
+function length(v: Pt) {
+  return Math.hypot(v.x, v.y);
+}
+
+function normalize(v: Pt): Pt | null {
+  const len = length(v);
+  if (len < 0.0001) return null;
+  return { x: v.x / len, y: v.y / len };
+}
+
+function leftNormal(v: Pt): Pt {
+  return { x: -v.y, y: v.x };
 }
 
 function createOffsetDimensionSegmentFromFace(args: {
@@ -172,6 +221,165 @@ function createOffsetDimensionSegmentFromFace(args: {
   };
 }
 
+function buildBaseWallFaces(centerA: Pt, centerB: Pt, thickness: number) {
+  const dir = normalize(sub(centerB, centerA));
+
+  if (!dir) {
+    const half = thickness / 2;
+    return {
+      top: {
+        start: { x: centerA.x - half, y: centerA.y - half },
+        end: { x: centerA.x + half, y: centerA.y - half },
+      },
+      bottom: {
+        start: { x: centerA.x - half, y: centerA.y + half },
+        end: { x: centerA.x + half, y: centerA.y + half },
+      },
+    };
+  }
+
+  const n = leftNormal(dir);
+  const half = thickness / 2;
+
+  return {
+    top: {
+      start: add(centerA, mul(n, half)),
+      end: add(centerB, mul(n, half)),
+    },
+    bottom: {
+      start: add(centerA, mul(n, -half)),
+      end: add(centerB, mul(n, -half)),
+    },
+  };
+}
+
+function buildParallelFaceOnChosenSide(args: {
+  centerStart: Pt;
+  centerEnd: Pt;
+  thickness: number;
+  useTopSide: boolean;
+}) {
+  const { centerStart, centerEnd, thickness, useTopSide } = args;
+
+  const base = buildBaseWallFaces(centerStart, centerEnd, thickness);
+  return useTopSide ? base.top : base.bottom;
+}
+
+type FaceGeom = {
+  start: Pt;
+  end: Pt;
+};
+
+type DimensionSideVisual = {
+  lineLeft: Line;
+  lineRight: Line;
+  startTick: Line;
+  endTick: Line;
+  text: Text;
+};
+
+function createDimensionSide(args: {
+  faceStart: Pt;
+  faceEnd: Pt;
+  wallCenterMid: Pt;
+  angleDeg: number;
+  tickSize: number;
+  textGap: number;
+  hidden?: boolean;
+  startConnected?: boolean;
+  endConnected?: boolean;
+}) {
+  const {
+    faceStart,
+    faceEnd,
+    wallCenterMid,
+    angleDeg,
+    tickSize,
+    textGap,
+    hidden = false,
+    startConnected = false,
+    endConnected = false,
+  } = args;
+
+  const dim = createOffsetDimensionSegmentFromFace({
+    faceStart,
+    faceEnd,
+    wallCenterMid,
+    offset: 16,
+  });
+
+  const startPt = dim.start;
+  const endPt = dim.end;
+  const displayLength = distance(startPt, endPt);
+
+  const safeGap = Math.min(textGap, Math.max(0, displayLength - 16));
+  const mid = midpoint(startPt, endPt);
+
+  const gapHalfX = dim.ux * (safeGap / 2);
+  const gapHalfY = dim.uy * (safeGap / 2);
+
+  const gapStart = {
+    x: mid.x - gapHalfX,
+    y: mid.y - gapHalfY,
+  };
+
+  const gapEnd = {
+    x: mid.x + gapHalfX,
+    y: mid.y + gapHalfY,
+  };
+
+  const lineLeft = hidden
+    ? createHiddenDimensionLine(startPt.x, startPt.y)
+    : createDimensionLine(startPt.x, startPt.y, gapStart.x, gapStart.y);
+
+  const lineRight = hidden
+    ? createHiddenDimensionLine(endPt.x, endPt.y)
+    : createDimensionLine(gapEnd.x, gapEnd.y, endPt.x, endPt.y);
+
+  const startTickPts = makePerpTick(startPt, dim.nx, dim.ny, tickSize);
+  const endTickPts = makePerpTick(endPt, dim.nx, dim.ny, tickSize);
+
+  const startTick =
+    hidden || startConnected
+      ? createHiddenDimensionLine(startPt.x, startPt.y)
+      : createDimensionLine(
+          startTickPts.a.x,
+          startTickPts.a.y,
+          startTickPts.b.x,
+          startTickPts.b.y
+        );
+
+  const endTick =
+    hidden || endConnected
+      ? createHiddenDimensionLine(endPt.x, endPt.y)
+      : createDimensionLine(
+          endTickPts.a.x,
+          endTickPts.a.y,
+          endTickPts.b.x,
+          endTickPts.b.y
+        );
+
+  const text = hidden
+    ? createHiddenDimensionText(mid.x, mid.y, angleDeg)
+    : createDimensionText(
+        Math.round(displayLength).toString(),
+        mid.x,
+        mid.y,
+        angleDeg
+      );
+
+  return {
+    lineLeft,
+    lineRight,
+    startTick,
+    endTick,
+    text,
+    startPt,
+    endPt,
+    displayLength,
+  };
+}
+
 export function createWallDimensions(
   canvas: Canvas,
   centerA: Pt,
@@ -188,6 +396,12 @@ export function createWallDimensions(
     endConnectionCount?: number;
     startTJoinHostOther?: Pt | null;
     endTJoinHostOther?: Pt | null;
+
+    outerDimensionChainStart?: Pt | null;
+    outerDimensionChainEnd?: Pt | null;
+    outerDimensionVisible?: boolean;
+    outerDimensionStartConnected?: boolean;
+    outerDimensionEndConnected?: boolean;
   }
 ): WallDimensionVisual {
   const showStartThickness = options?.showStartThickness ?? true;
@@ -220,164 +434,105 @@ export function createWallDimensions(
   const bottomGeomStart = stripPoints[3];
   const bottomGeomEnd = stripPoints[2];
 
+  const localTopLen = distance(topGeomStart, topGeomEnd);
+  const localBottomLen = distance(bottomGeomStart, bottomGeomEnd);
+
+  /**
+   * In a T-host split, the continuous outer side is usually the longer side.
+   * We will use that side later for the merged outer dimension chain.
+   */
+  const outerIsTop = localTopLen >= localBottomLen;
+
+  let topFace: FaceGeom = {
+    start: topGeomStart,
+    end: topGeomEnd,
+  };
+
+  let bottomFace: FaceGeom = {
+    start: bottomGeomStart,
+    end: bottomGeomEnd,
+  };
+
+  const hasOuterChain =
+    !!options?.outerDimensionChainStart && !!options?.outerDimensionChainEnd;
+
+  if (hasOuterChain) {
+    const mergedOuterFace = buildParallelFaceOnChosenSide({
+      centerStart: options!.outerDimensionChainStart!,
+      centerEnd: options!.outerDimensionChainEnd!,
+      thickness,
+      useTopSide: outerIsTop,
+    });
+
+    if (outerIsTop) {
+      topFace = mergedOuterFace;
+    } else {
+      bottomFace = mergedOuterFace;
+    }
+  }
+
   const wallCenterMid = midpoint(centerA, centerB);
-  const mainOffset = 16;
-
-  const topDim = createOffsetDimensionSegmentFromFace({
-    faceStart: topGeomStart,
-    faceEnd: topGeomEnd,
-    wallCenterMid,
-    offset: mainOffset,
-  });
-
-  const bottomDim = createOffsetDimensionSegmentFromFace({
-    faceStart: bottomGeomStart,
-    faceEnd: bottomGeomEnd,
-    wallCenterMid,
-    offset: mainOffset,
-  });
-
-  const topStartPt = topDim.start;
-  const topEndPt = topDim.end;
-  const bottomStartPt = bottomDim.start;
-  const bottomEndPt = bottomDim.end;
-
-  const topDisplayLength = distance(topStartPt, topEndPt);
-  const bottomDisplayLength = distance(bottomStartPt, bottomEndPt);
 
   const textGap = 56;
   const tickSize = 18;
 
-  const safeTopGap = Math.min(textGap, Math.max(0, topDisplayLength - 16));
-  const safeBottomGap = Math.min(
+  const outerDimensionVisible = options?.outerDimensionVisible ?? true;
+
+  const topIsHidden = outerIsTop && !outerDimensionVisible;
+  const bottomIsHidden = !outerIsTop && !outerDimensionVisible;
+
+  const topStartConnected = outerIsTop
+    ? options?.outerDimensionStartConnected ?? startConnected
+    : startConnected;
+
+  const topEndConnected = outerIsTop
+    ? options?.outerDimensionEndConnected ?? endConnected
+    : endConnected;
+
+  const bottomStartConnected = !outerIsTop
+    ? options?.outerDimensionStartConnected ?? startConnected
+    : startConnected;
+
+  const bottomEndConnected = !outerIsTop
+    ? options?.outerDimensionEndConnected ?? endConnected
+    : endConnected;
+
+  const topSide = createDimensionSide({
+    faceStart: topFace.start,
+    faceEnd: topFace.end,
+    wallCenterMid,
+    angleDeg,
+    tickSize,
     textGap,
-    Math.max(0, bottomDisplayLength - 16)
-  );
+    hidden: topIsHidden,
+    startConnected: topStartConnected,
+    endConnected: topEndConnected,
+  });
 
-  const topMid = midpoint(topStartPt, topEndPt);
-  const bottomMid = midpoint(bottomStartPt, bottomEndPt);
+  const bottomSide = createDimensionSide({
+    faceStart: bottomFace.start,
+    faceEnd: bottomFace.end,
+    wallCenterMid,
+    angleDeg,
+    tickSize,
+    textGap,
+    hidden: bottomIsHidden,
+    startConnected: bottomStartConnected,
+    endConnected: bottomEndConnected,
+  });
 
-  const topGapHalfX = topDim.ux * (safeTopGap / 2);
-  const topGapHalfY = topDim.uy * (safeTopGap / 2);
+  const topLineLeft = topSide.lineLeft;
+  const topLineRight = topSide.lineRight;
+  const bottomLineLeft = bottomSide.lineLeft;
+  const bottomLineRight = bottomSide.lineRight;
 
-  const bottomGapHalfX = bottomDim.ux * (safeBottomGap / 2);
-  const bottomGapHalfY = bottomDim.uy * (safeBottomGap / 2);
+  const startTopTick = topSide.startTick;
+  const startBottomTick = bottomSide.startTick;
+  const endTopTick = topSide.endTick;
+  const endBottomTick = bottomSide.endTick;
 
-  const topGapStart = {
-    x: topMid.x - topGapHalfX,
-    y: topMid.y - topGapHalfY,
-  };
-  const topGapEnd = {
-    x: topMid.x + topGapHalfX,
-    y: topMid.y + topGapHalfY,
-  };
-
-  const bottomGapStart = {
-    x: bottomMid.x - bottomGapHalfX,
-    y: bottomMid.y - bottomGapHalfY,
-  };
-  const bottomGapEnd = {
-    x: bottomMid.x + bottomGapHalfX,
-    y: bottomMid.y + bottomGapHalfY,
-  };
-
-  const topLineLeft = createDimensionLine(
-    topStartPt.x,
-    topStartPt.y,
-    topGapStart.x,
-    topGapStart.y
-  );
-
-  const topLineRight = createDimensionLine(
-    topGapEnd.x,
-    topGapEnd.y,
-    topEndPt.x,
-    topEndPt.y
-  );
-
-  const bottomLineLeft = createDimensionLine(
-    bottomStartPt.x,
-    bottomStartPt.y,
-    bottomGapStart.x,
-    bottomGapStart.y
-  );
-
-  const bottomLineRight = createDimensionLine(
-    bottomGapEnd.x,
-    bottomGapEnd.y,
-    bottomEndPt.x,
-    bottomEndPt.y
-  );
-
-  const startTopTickPts = makePerpTick(
-    topStartPt,
-    topDim.nx,
-    topDim.ny,
-    tickSize
-  );
-  const startBottomTickPts = makePerpTick(
-    bottomStartPt,
-    bottomDim.nx,
-    bottomDim.ny,
-    tickSize
-  );
-  const endTopTickPts = makePerpTick(topEndPt, topDim.nx, topDim.ny, tickSize);
-  const endBottomTickPts = makePerpTick(
-    bottomEndPt,
-    bottomDim.nx,
-    bottomDim.ny,
-    tickSize
-  );
-
-  const startTopTick = startConnected
-    ? createHiddenDimensionLine(topStartPt.x, topStartPt.y)
-    : createDimensionLine(
-        startTopTickPts.a.x,
-        startTopTickPts.a.y,
-        startTopTickPts.b.x,
-        startTopTickPts.b.y
-      );
-
-  const startBottomTick = startConnected
-    ? createHiddenDimensionLine(bottomStartPt.x, bottomStartPt.y)
-    : createDimensionLine(
-        startBottomTickPts.a.x,
-        startBottomTickPts.a.y,
-        startBottomTickPts.b.x,
-        startBottomTickPts.b.y
-      );
-
-  const endTopTick = endConnected
-    ? createHiddenDimensionLine(topEndPt.x, topEndPt.y)
-    : createDimensionLine(
-        endTopTickPts.a.x,
-        endTopTickPts.a.y,
-        endTopTickPts.b.x,
-        endTopTickPts.b.y
-      );
-
-  const endBottomTick = endConnected
-    ? createHiddenDimensionLine(bottomEndPt.x, bottomEndPt.y)
-    : createDimensionLine(
-        endBottomTickPts.a.x,
-        endBottomTickPts.a.y,
-        endBottomTickPts.b.x,
-        endBottomTickPts.b.y
-      );
-
-  const topText = createDimensionText(
-    Math.round(topDisplayLength).toString(),
-    topMid.x,
-    topMid.y,
-    angleDeg
-  );
-
-  const bottomText = createDimensionText(
-    Math.round(bottomDisplayLength).toString(),
-    bottomMid.x,
-    bottomMid.y,
-    angleDeg
-  );
+  const topText = topSide.text;
+  const bottomText = bottomSide.text;
 
   const thicknessAngle = normalizeTextAngle(angleDeg + 90);
 

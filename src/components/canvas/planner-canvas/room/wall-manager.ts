@@ -60,6 +60,14 @@ type JoinEndpointData = {
   connectionCount: number;
 };
 
+type OuterDimensionChainData = {
+  chainStart: Pt;
+  chainEnd: Pt;
+  ownerWallId: string;
+  ownerStartConnected: boolean;
+  ownerEndConnected: boolean;
+};
+
 function sub(a: Pt, b: Pt): Pt {
   return { x: a.x - b.x, y: a.y - b.y };
 }
@@ -84,6 +92,25 @@ function isCollinearDirection(a: Pt, b: Pt, tolerance = 0.999) {
   if (!na || !nb) return false;
 
   return Math.abs(dot(na, nb)) >= tolerance;
+}
+
+function pointKey(p: Pt) {
+  return `${p.x.toFixed(3)}:${p.y.toFixed(3)}`;
+}
+
+function minPoint(a: Pt, b: Pt) {
+  if (a.x !== b.x) return a.x < b.x ? a : b;
+  return a.y <= b.y ? a : b;
+}
+
+function maxPoint(a: Pt, b: Pt) {
+  if (a.x !== b.x) return a.x > b.x ? a : b;
+  return a.y >= b.y ? a : b;
+}
+
+function comparePoints(a: Pt, b: Pt) {
+  if (a.x !== b.x) return a.x - b.x;
+  return a.y - b.y;
 }
 
 function analyzeEndpointJoin(args: {
@@ -228,8 +255,104 @@ export function createWallManager(args: {
     };
   };
 
+  const findCollinearChainForWall = (wall: SegmentWall): SegmentWall[] => {
+    const dir = normalize(sub(wall.b, wall.a));
+    if (!dir) return [wall];
+
+    const segmentWalls = walls.filter(
+      (item): item is SegmentWall => item.kind === "segment"
+    );
+
+    const result: SegmentWall[] = [];
+    const queue: SegmentWall[] = [wall];
+    const visited = new Set<string>();
+
+    while (queue.length) {
+      const current = queue.shift()!;
+      if (visited.has(current.id)) continue;
+
+      visited.add(current.id);
+      result.push(current);
+
+      const currentDir = normalize(sub(current.b, current.a));
+      if (!currentDir || !isCollinearDirection(dir, currentDir)) continue;
+
+      for (const candidate of segmentWalls) {
+        if (visited.has(candidate.id)) continue;
+
+        const candidateDir = normalize(sub(candidate.b, candidate.a));
+        if (!candidateDir || !isCollinearDirection(dir, candidateDir)) continue;
+
+        const sharesNode =
+          sameNode(candidate.a, current.a) ||
+          sameNode(candidate.a, current.b) ||
+          sameNode(candidate.b, current.a) ||
+          sameNode(candidate.b, current.b);
+
+        if (sharesNode) {
+          queue.push(candidate);
+        }
+      }
+    }
+
+    return result;
+  };
+
+  const getOuterDimensionChainData = (
+    wall: SegmentWall
+  ): OuterDimensionChainData | null => {
+    const chain = findCollinearChainForWall(wall);
+    if (chain.length <= 1) return null;
+
+    const dir = normalize(sub(wall.b, wall.a));
+    if (!dir) return null;
+
+    const endpointUseCount = new Map<string, number>();
+    const pointByKey = new Map<string, Pt>();
+
+    for (const item of chain) {
+      const aKey = pointKey(item.a);
+      const bKey = pointKey(item.b);
+
+      endpointUseCount.set(aKey, (endpointUseCount.get(aKey) ?? 0) + 1);
+      endpointUseCount.set(bKey, (endpointUseCount.get(bKey) ?? 0) + 1);
+
+      pointByKey.set(aKey, item.a);
+      pointByKey.set(bKey, item.b);
+    }
+
+    const chainEnds = Array.from(endpointUseCount.entries())
+      .filter(([, count]) => count === 1)
+      .map(([key]) => pointByKey.get(key)!)
+      .sort(comparePoints);
+
+    if (chainEnds.length !== 2) {
+      return null;
+    }
+
+    const chainStart = minPoint(chainEnds[0], chainEnds[1]);
+    const chainEnd = maxPoint(chainEnds[0], chainEnds[1]);
+
+    const ownerWall = chain.slice().sort((a, b) => a.id.localeCompare(b.id))[0];
+
+    const ownerTouchesStart =
+      sameNode(ownerWall.a, chainStart) || sameNode(ownerWall.b, chainStart);
+
+    const ownerTouchesEnd =
+      sameNode(ownerWall.a, chainEnd) || sameNode(ownerWall.b, chainEnd);
+
+    return {
+      chainStart,
+      chainEnd,
+      ownerWallId: ownerWall.id,
+      ownerStartConnected: !ownerTouchesStart,
+      ownerEndConnected: !ownerTouchesEnd,
+    };
+  };
+
   const refreshSegmentWallGraphics = (wall: SegmentWall) => {
     const joinData = getJoinData(wall);
+    const outerChain = getOuterDimensionChainData(wall);
 
     updateWallStripVisual(wall.visual, wall.a, wall.b, wall.thickness, {
       selectable: false,
@@ -262,6 +385,18 @@ export function createWallManager(args: {
         endConnectionCount: joinData.endConnectionCount,
         startTJoinHostOther: joinData.startTJoinHostOther,
         endTJoinHostOther: joinData.endTJoinHostOther,
+
+        outerDimensionChainStart: outerChain?.chainStart ?? null,
+        outerDimensionChainEnd: outerChain?.chainEnd ?? null,
+        outerDimensionVisible: outerChain
+          ? outerChain.ownerWallId === wall.id
+          : true,
+        outerDimensionStartConnected: outerChain
+          ? outerChain.ownerStartConnected
+          : joinData.startConnectionCount > 0,
+        outerDimensionEndConnected: outerChain
+          ? outerChain.ownerEndConnected
+          : joinData.endConnectionCount > 0,
       }
     );
   };
@@ -323,6 +458,11 @@ export function createWallManager(args: {
         endConnectionCount: 0,
         startTJoinHostOther: null,
         endTJoinHostOther: null,
+        outerDimensionChainStart: null,
+        outerDimensionChainEnd: null,
+        outerDimensionVisible: true,
+        outerDimensionStartConnected: false,
+        outerDimensionEndConnected: false,
       }
     );
 
